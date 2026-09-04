@@ -17,8 +17,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--deterministic", action="store_true", help="Use deterministic PyTorch kernels when available (slower)")
     p.add_argument("--output-root", default="runs", help="Local mirror/fallback directory")
     p.add_argument("--wandb-api-key", default=None, help="W&B API key passed directly to this process")
-    p.add_argument("--wandb-project", default="uav-search-paper-baselines")
-    p.add_argument("--wandb-entity", default=None, help="Optional W&B user/team")
     p.add_argument(
         "--wandb-mode",
         choices=["auto", "online", "offline", "disabled"],
@@ -41,9 +39,7 @@ def main() -> None:
         device=a.device,
         output_root=a.output_root,
         wandb=False if a.local_only else None,
-        wandb_project=a.wandb_project,
         wandb_api_key=a.wandb_api_key,
-        wandb_entity=a.wandb_entity,
         run_name=a.run_name,
         deterministic=a.deterministic,
         amp_mode=a.amp,

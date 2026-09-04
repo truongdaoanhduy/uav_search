@@ -67,7 +67,7 @@
 ### Task 5: Performance metrics and CLI
 **Files:** Modify `runner/train.py`, `scripts/train.py`, `scripts/run_all.py`, `configs/paper.yaml`; modify smoke tests.
 
-**Interfaces:** CLI adds `--amp auto|on|off`, `--deterministic`, `--wandb-mode auto|online|offline|disabled`, `--wandb-project`; trainer logs `env_steps_per_sec`, `updates_per_sec`, `episode_sec`, `training_sec`, GPU memory when available.
+**Interfaces:** CLI adds `--amp auto|on|off`, `--deterministic`, `--wandb-mode auto|online|offline|disabled`, `--wandb-api-key`; W&B destination is fixed to `uav_search_paper/uav_search_target`; trainer logs `env_steps_per_sec`, `updates_per_sec`, `episode_sec`, `training_sec`, GPU memory when available.
 
 - [ ] Add failing CLI/smoke tests for new defaults and overrides.
 - [ ] Implement timing counters/device stats without synchronizing CUDA more than needed.

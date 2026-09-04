@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
+WANDB_ENTITY = "uav_search_paper"
+WANDB_PROJECT = "uav_search_target"
+
+
 def tracking_mode(api_key: str | None = None, requested: str = "auto") -> str:
     """Resolve tracking mode without ever storing or printing the API key."""
     requested = str(requested).lower()
@@ -31,13 +35,11 @@ class WandbLogger:
 
     def __init__(
         self,
-        project: str,
         run_name: str,
         config: dict[str, Any],
         run_dir: str | Path,
         api_key: str | None = None,
         mode: str = "auto",
-        entity: str | None = None,
         enabled: bool | None = None,
     ):
         self.run_dir = Path(run_dir)
@@ -65,14 +67,13 @@ class WandbLogger:
             if self.mode == "online":
                 wandb.login(key=api_key, relogin=True)
             kwargs: dict[str, Any] = {
-                "project": project,
+                "project": WANDB_PROJECT,
                 "name": run_name,
                 "config": config,
                 "mode": self.mode,
                 "dir": str(self.run_dir),
             }
-            if entity:
-                kwargs["entity"] = entity
+            kwargs["entity"] = WANDB_ENTITY
             self.run = wandb.init(**kwargs)
             self.active = self.run is not None
             self.online = self.active and self.mode == "online"

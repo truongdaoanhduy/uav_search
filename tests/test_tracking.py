@@ -50,9 +50,13 @@ class FakeSettings:
 
 
 def fake_wandb_module(run):
+    def _init(**kwargs):
+        run.init_kwargs = kwargs
+        return run
+
     return SimpleNamespace(
         login=lambda **kwargs: True,
-        init=lambda **kwargs: run,
+        init=_init,
         Settings=FakeSettings,
         Table=FakeTable,
         Artifact=FakeArtifact,
@@ -62,7 +66,7 @@ def fake_wandb_module(run):
 
 def test_tracking_mode_without_api_key_is_local(tmp_path):
     assert tracking_mode() == "local"
-    logger = WandbLogger(project="test", run_name="no-key", config={}, run_dir=tmp_path, mode="auto")
+    logger = WandbLogger(run_name="no-key", config={}, run_dir=tmp_path, mode="auto")
     assert logger.mode == "local"
     assert logger.online is False
     logger.log({"train/reward": 1.0}, step=1)
@@ -81,8 +85,10 @@ def test_environment_api_key_is_ignored(monkeypatch):
 def test_online_logger_streams_diagnostics_and_artifacts(monkeypatch, tmp_path):
     run = FakeRun()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb_module(run))
-    logger = WandbLogger(project="test", run_name="online", config={"x": 1}, run_dir=tmp_path, api_key="test-key", mode="auto")
+    logger = WandbLogger(run_name="online", config={"x": 1}, run_dir=tmp_path, api_key="test-key", mode="auto")
     assert logger.online is True
+    assert run.init_kwargs["project"] == "uav_search_target"
+    assert run.init_kwargs["entity"] == "uav_search_paper"
 
     logger.log({"train/return_mean": 3.0}, step=2)
     logger.log_low_episode({"episode": 2, "search_rate": 0.0, "signals": ["search_low"], "severity": "critical"})
@@ -115,7 +121,7 @@ def test_wandb_log_failure_falls_back_without_raising(monkeypatch, tmp_path):
 
     run = BrokenRun()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb_module(run))
-    logger = WandbLogger(project="test", run_name="broken", config={}, run_dir=tmp_path, api_key="test-key", mode="auto")
+    logger = WandbLogger(run_name="broken", config={}, run_dir=tmp_path, api_key="test-key", mode="auto")
     logger.log({"train/reward": 1.0}, step=1)
     assert logger.online is False
     assert logger.mode == "local"

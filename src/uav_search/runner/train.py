@@ -83,9 +83,7 @@ def train_experiment(
     device: str = "auto",
     output_root: str | Path = "runs",
     wandb: bool | None = None,
-    wandb_project: str = "uav-search-paper-baselines",
     wandb_api_key: str | None = None,
-    wandb_entity: str | None = None,
     run_name: str | None = None,
     runtime_overrides: dict[str, Any] | None = None,
     deterministic: bool = False,
@@ -119,13 +117,11 @@ def train_experiment(
     env = PaperUAVEnv(cfg, seed=seed)
     algo = make_algorithm(algorithm, env, cfg, device=device, seed=seed)
     wb = WandbLogger(
-        project=wandb_project,
         run_name=f"{algorithm}-{scenario}-{name}",
         config=cfg,
         run_dir=run_dir,
         api_key=wandb_api_key,
         mode=wandb_mode,
-        entity=wandb_entity,
         enabled=wandb,
     )
     rng = np.random.default_rng(seed + 12345)

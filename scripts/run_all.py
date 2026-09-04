@@ -15,8 +15,6 @@ def main() -> None:
     p.add_argument("--deterministic", action="store_true")
     p.add_argument("--output-root", default="runs")
     p.add_argument("--wandb-api-key", default=None, help="W&B API key passed directly to this process")
-    p.add_argument("--wandb-project", default="uav-search-paper-baselines")
-    p.add_argument("--wandb-entity", default=None)
     p.add_argument(
         "--wandb-mode",
         choices=["auto", "online", "offline", "disabled"],
@@ -36,9 +34,7 @@ def main() -> None:
                 device=a.device,
                 output_root=a.output_root,
                 wandb=False if a.local_only else None,
-                wandb_project=a.wandb_project,
                 wandb_api_key=a.wandb_api_key,
-                wandb_entity=a.wandb_entity,
                 deterministic=a.deterministic,
                 amp_mode=a.amp,
                 wandb_mode="disabled" if a.local_only else a.wandb_mode,

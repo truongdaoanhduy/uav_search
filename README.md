@@ -43,8 +43,7 @@ python scripts/train.py \
   --episodes 50000 \
   --device auto \
   --amp auto \
-  --wandb-api-key YOUR_WANDB_TOKEN \
-  --wandb-project uav-search-paper-baselines
+  --wandb-api-key YOUR_WANDB_TOKEN
 ```
 
 Có W&B key: metrics, low-metric episodes, error diagnostics, plots và checkpoints được gửi lên W&B. Không truyền key: training vẫn chạy và lưu local trong `runs/`.
@@ -52,7 +51,7 @@ Có W&B key: metrics, low-metric episodes, error diagnostics, plots và checkpoi
 ## Chạy cả 3 thuật toán × 2 scenarios
 
 ```bash
-python scripts/run_all.py --episodes 50000 --device auto --amp auto --wandb-api-key YOUR_WANDB_TOKEN --wandb-project uav-search-paper-baselines
+python scripts/run_all.py --episodes 50000 --device auto --amp auto --wandb-api-key YOUR_WANDB_TOKEN
 ```
 
-Nếu không dùng W&B, bỏ `--wandb-api-key` và `--wandb-project` khỏi lệnh.
+W&B được cố định tại `uav_search_paper/uav_search_target`. Nếu không dùng W&B, chỉ cần bỏ `--wandb-api-key` khỏi lệnh.
