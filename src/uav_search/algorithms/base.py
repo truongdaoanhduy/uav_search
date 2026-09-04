@@ -20,12 +20,6 @@ class BaseOffPolicy:
             amp_mode=str(runtime_cfg.get("amp_mode", "auto")),
         )
         self.device = self.runtime_profile.device
-        runtime_cfg = cfg.get("runtime", {})
-        self.runtime_profile = configure_runtime(
-            self.device,
-            deterministic=bool(runtime_cfg.get("deterministic", False)),
-            amp_mode=str(runtime_cfg.get("amp_mode", "auto")),
-        )
         self.scaler = make_grad_scaler(self.runtime_profile)
         self.n_agents = env.n_agents
         self.obs_dim = env.obs_dim

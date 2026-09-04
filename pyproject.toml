@@ -14,10 +14,10 @@ dependencies = [
   "PyYAML>=6.0",
   "pandas>=2.0",
   "matplotlib>=3.7",
+  "wandb>=0.17",
 ]
 
 [project.optional-dependencies]
-wandb = ["wandb>=0.17"]
 dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]

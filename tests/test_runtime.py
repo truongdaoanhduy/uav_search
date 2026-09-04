@@ -1,9 +1,16 @@
 import torch
 import pytest
 
-from uav_search.runtime import configure_runtime, make_adam, resolve_device
+from uav_search.runtime import configure_runtime, make_adam, resolve_device, system_report
 from uav_search.runner.train import train_experiment
 
+
+
+def test_system_report_contains_training_backend_information():
+    report = system_report("auto")
+    for key in ["python", "torch", "device", "device_name", "cuda_available", "amp_enabled"]:
+        assert key in report
+    assert report["device"] in {"cpu", "cuda"} or str(report["device"]).startswith("cuda:")
 
 def test_resolve_device_auto_returns_available_backend():
     device = resolve_device("auto")

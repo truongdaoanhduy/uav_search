@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import platform
+import sys
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
@@ -81,6 +83,24 @@ def configure_runtime(
         total_memory_gb=total_memory_gb,
     )
 
+
+
+def system_report(device: str | torch.device = "auto") -> dict[str, object]:
+    profile = configure_runtime(device, deterministic=False, amp_mode="auto")
+    report: dict[str, object] = {
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "torch": torch.__version__,
+        "device": str(profile.device),
+        "device_name": profile.device_name,
+        "cuda_available": bool(torch.cuda.is_available()),
+        "torch_cuda": torch.version.cuda,
+        "amp_enabled": bool(profile.amp_enabled),
+        "compute_capability": profile.compute_capability,
+        "total_memory_gb": profile.total_memory_gb,
+        "deterministic_default": False,
+    }
+    return report
 
 def autocast_context(profile: RuntimeProfile):
     if not profile.amp_enabled:

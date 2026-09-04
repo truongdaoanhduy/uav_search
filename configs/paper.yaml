@@ -63,3 +63,4 @@ runtime:
   exploration_noise: 0.15
   low_episode_window: 20
   save_best: true
+  checkpoint_every_episodes: 1000

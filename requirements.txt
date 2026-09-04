@@ -1,0 +1,16 @@
+# Core numerical / RL stack
+numpy>=1.24
+PyYAML>=6.0
+gymnasium>=0.29
+pandas>=2.0
+matplotlib>=3.7
+
+# PyTorch: an already-installed CUDA build on Kaggle/rented GPU satisfies this.
+# On a blank machine, install the NVIDIA driver first if GPU training is required.
+torch>=2.2
+
+# Experiment tracking. WANDB_API_KEY is read from the environment at runtime.
+wandb>=0.17
+
+# Tests / verification
+pytest>=8.0

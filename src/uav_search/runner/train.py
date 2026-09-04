@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,12 +82,14 @@ def train_experiment(
     seed: int = 0,
     device: str = "auto",
     output_root: str | Path = "runs",
-    wandb: bool = False,
+    wandb: bool | None = None,
     wandb_project: str = "uav-search-paper-baselines",
+    wandb_entity: str | None = None,
     run_name: str | None = None,
     runtime_overrides: dict[str, Any] | None = None,
     deterministic: bool = False,
     amp_mode: str = "auto",
+    wandb_mode: str = "auto",
 ) -> Path:
     cfg = deepcopy(load_config(algorithm, scenario))
     cfg["runtime"]["seed"] = int(seed)
@@ -114,17 +117,28 @@ def train_experiment(
 
     env = PaperUAVEnv(cfg, seed=seed)
     algo = make_algorithm(algorithm, env, cfg, device=device, seed=seed)
-    wb = WandbLogger(wandb, wandb_project, f"{algorithm}-{scenario}-{name}", cfg)
+    wb = WandbLogger(
+        project=wandb_project,
+        run_name=f"{algorithm}-{scenario}-{name}",
+        config=cfg,
+        run_dir=run_dir,
+        mode=wandb_mode,
+        entity=wandb_entity,
+        enabled=wandb,
+    )
     rng = np.random.default_rng(seed + 12345)
     global_step = 0
     update_index = 0
     best_score = -float("inf")
     latest_update: dict[str, float] = {}
     current_context: dict[str, Any] = {"algorithm": algorithm, "scenario": scenario, "episode": 0, "step": 0}
+    train_started = time.perf_counter()
 
     try:
         for episode in range(1, int(cfg["runtime"]["episodes"]) + 1):
             current_context["episode"] = episode
+            episode_started = time.perf_counter()
+            episode_update_start = update_index
             obs_dict, _ = env.reset(seed=seed + episode - 1)
             obs = _obs_array(obs_dict, env.agents)
             ep_returns = np.zeros(env.n_agents, dtype=np.float64)
@@ -165,13 +179,24 @@ def train_experiment(
                         if metrics:
                             update_index += 1
                             latest_update = metrics
-                            logger.log_update({"update": update_index, "global_step": global_step, **metrics})
+                            update_row = {"update": update_index, "global_step": global_step, **metrics}
+                            logger.log_update(update_row)
+                            wb.log({f"update/{k}": v for k, v in update_row.items()})
                 if all(truncated.values()) or all(terminated.values()):
                     break
 
+            episode_sec = max(time.perf_counter() - episode_started, 1e-12)
+            wall_time_sec = time.perf_counter() - train_started
+            episode_updates = update_index - episode_update_start
+            episode_steps = int(current_context.get("step", 0))
             ep_metrics: dict[str, Any] = {
                 "episode": episode,
                 "global_step": global_step,
+                "episode_sec": float(episode_sec),
+                "wall_time_sec": float(wall_time_sec),
+                "env_steps_per_sec": float(episode_steps / episode_sec),
+                "updates_per_sec": float(episode_updates / episode_sec),
+                "updates": int(episode_updates),
                 "return_mean": float(ep_returns.mean()),
                 "return_sum": float(ep_returns.sum()),
                 "search_rate": float(last_info.get("search_rate", 0.0)),
@@ -190,12 +215,38 @@ def train_experiment(
                 "entropy": float(latest_update.get("entropy", 0.0)),
                 "alpha": float(latest_update.get("alpha", 0.0)),
             }
-            logger.log_episode(ep_metrics)
-            wb.log({f"train/{k}": v for k, v in ep_metrics.items() if k != "episode"}, step=episode)
+            if profile.device.type == "cuda":
+                ep_metrics["gpu_allocated_mb"] = float(torch.cuda.memory_allocated(profile.device) / (1024**2))
+                ep_metrics["gpu_reserved_mb"] = float(torch.cuda.memory_reserved(profile.device) / (1024**2))
+                ep_metrics["gpu_peak_allocated_mb"] = float(torch.cuda.max_memory_allocated(profile.device) / (1024**2))
+            performance_metrics = {
+                key: ep_metrics[key]
+                for key in (
+                    "episode", "global_step", "episode_sec", "wall_time_sec",
+                    "env_steps_per_sec", "updates_per_sec", "updates",
+                    "gpu_allocated_mb", "gpu_reserved_mb", "gpu_peak_allocated_mb",
+                )
+                if key in ep_metrics
+            }
+            logger.log_performance(performance_metrics)
+            low_payload = logger.log_episode(ep_metrics)
+            if low_payload is not None:
+                wb.log_low_episode(low_payload)
+            wb.log({f"train/{k}": v for k, v in ep_metrics.items()})
+            wb.log({f"performance/{k}": v for k, v in performance_metrics.items()})
             score = ep_metrics["return_mean"] + 100.0 * ep_metrics["search_rate"]
             if cfg["runtime"].get("save_best", True) and score > best_score:
                 best_score = score
                 algo.save(logger.checkpoint_dir / "best.pt")
+            checkpoint_every = int(cfg["runtime"].get("checkpoint_every_episodes", 0))
+            if checkpoint_every > 0 and episode % checkpoint_every == 0:
+                latest_path = logger.checkpoint_dir / "latest.pt"
+                algo.save(latest_path)
+                wb.log_model(
+                    latest_path,
+                    f"{algorithm}-{scenario}-periodic",
+                    aliases=["latest", f"episode-{episode}"],
+                )
 
         algo.save(logger.checkpoint_dir / "final.pt")
         plot_training_curves(logger.episode_csv, logger.plots_dir)
@@ -218,19 +269,35 @@ def train_experiment(
         )
         with (run_dir / "evaluation.json").open("w", encoding="utf-8") as f:
             json.dump(eval_metrics, f, indent=2, ensure_ascii=False)
+        total_training_sec = time.perf_counter() - train_started
+        summary = {
+            "algorithm": algorithm, "scenario": scenario, "episodes": int(cfg["runtime"]["episodes"]),
+            "global_steps": global_step, "device": device, "best_score": best_score,
+            "training_sec": float(total_training_sec),
+            "tracking_mode": wb.mode,
+            "runtime_profile": profile.as_dict(),
+            "evaluation": eval_metrics,
+        }
         with (run_dir / "summary.json").open("w", encoding="utf-8") as f:
-            json.dump({
-                "algorithm": algorithm, "scenario": scenario, "episodes": int(cfg["runtime"]["episodes"]),
-                "global_steps": global_step, "device": device, "best_score": best_score,
-                "evaluation": eval_metrics,
-            }, f, indent=2, ensure_ascii=False)
+            json.dump(summary, f, indent=2, ensure_ascii=False)
+        wb.log({f"eval/{k}": v for k, v in eval_metrics.items() if isinstance(v, (int, float))})
+        for image_path in sorted(logger.plots_dir.glob("*.png")):
+            wb.log_image(image_path, f"plots/{image_path.stem}")
+        wb.log_model(logger.checkpoint_dir / "best.pt", f"{algorithm}-{scenario}-best", aliases=["best"])
+        wb.log_model(logger.checkpoint_dir / "final.pt", f"{algorithm}-{scenario}-final", aliases=["latest", "final"])
+        wb.log_run_artifact(f"{algorithm}-{scenario}-{name}-run")
         return run_dir
     except BaseException as exc:
-        logger.log_error(exc, current_context)
+        error_payload = logger.log_error(exc, current_context)
+        wb.log_error(error_payload)
         try:
-            algo.save(logger.checkpoint_dir / "crash.pt")
+            crash_path = logger.checkpoint_dir / "crash.pt"
+            algo.save(crash_path)
+            wb.log_model(crash_path, f"{algorithm}-{scenario}-crash", aliases=["crash"])
         except BaseException as save_exc:
-            logger.log_error(save_exc, {**current_context, "during": "crash_checkpoint"})
+            save_payload = logger.log_error(save_exc, {**current_context, "during": "crash_checkpoint"})
+            wb.log_error(save_payload)
+        wb.log_run_artifact(f"{algorithm}-{scenario}-{name}-crash-run")
         raise
     finally:
         wb.finish()

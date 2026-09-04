@@ -15,7 +15,7 @@ def test_run_logger_writes_metrics_low_episode_and_error(tmp_path):
         "collisions": 0, "obstacle_hits": 0, "min_battery_pct": 99.0,
         "action_saturation": 0.1, "mean_comm_rate_mbps": 2.0, "critic_loss": 1.0, "actor_loss": -1.0,
     })
-    logger.log_episode({
+    low_payload = logger.log_episode({
         "episode": 2, "return_mean": -20.0, "search_rate": 0.0, "targets_found": 0,
         "energy_j": 5000.0, "mean_broken_link_s": 10.0, "max_broken_link_s": 20.0,
         "collisions": 3, "obstacle_hits": 2, "min_battery_pct": 8.0,
@@ -32,11 +32,16 @@ def test_run_logger_writes_metrics_low_episode_and_error(tmp_path):
     assert len(ep) == 2 and len(up) == 1
     lines = (tmp_path / "logs" / "low_episodes.jsonl").read_text().strip().splitlines()
     assert lines
+    low_csv = pd.read_csv(tmp_path / "logs" / "low_metric_episodes.csv")
+    assert len(low_csv) >= 1
     low = json.loads(lines[-1])
     assert "search_low" in low["signals"]
     assert "link_unstable" in low["signals"]
     assert "collision_high" in low["signals"]
     assert "action_saturated" in low["signals"]
+    assert low_payload is not None
+    assert low_payload["severity"] == "critical"
+    assert "search_low" in low_csv.iloc[-1]["signals"]
     assert "boom" in (tmp_path / "logs" / "errors.log").read_text()
 
 
