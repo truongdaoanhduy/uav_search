@@ -9,12 +9,12 @@ description = "Minimal paper-faithful MARL baselines for heterogeneous UAV post-
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24",
-  "torch>=2.0",
+  "torch>=2.2",
   "gymnasium>=0.29",
   "PyYAML>=6.0",
   "pandas>=2.0",
   "matplotlib>=3.7",
-  "wandb>=0.17",
+  "wandb>=0.22.3",
 ]
 
 [project.optional-dependencies]

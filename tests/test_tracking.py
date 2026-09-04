@@ -51,6 +51,7 @@ class FakeSettings:
 
 def fake_wandb_module(run):
     return SimpleNamespace(
+        login=lambda **kwargs: True,
         init=lambda **kwargs: run,
         Settings=FakeSettings,
         Table=FakeTable,
@@ -59,8 +60,7 @@ def fake_wandb_module(run):
     )
 
 
-def test_tracking_mode_without_api_key_is_local(monkeypatch, tmp_path):
-    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+def test_tracking_mode_without_api_key_is_local(tmp_path):
     assert tracking_mode() == "local"
     logger = WandbLogger(project="test", run_name="no-key", config={}, run_dir=tmp_path, mode="auto")
     assert logger.mode == "local"
@@ -69,16 +69,19 @@ def test_tracking_mode_without_api_key_is_local(monkeypatch, tmp_path):
     logger.finish()
 
 
-def test_tracking_mode_with_api_key_prefers_online(monkeypatch):
-    monkeypatch.setenv("WANDB_API_KEY", "test-key")
-    assert tracking_mode() == "online"
+def test_tracking_mode_with_api_key_prefers_online():
+    assert tracking_mode(api_key="test-key") == "online"
+
+def test_environment_api_key_is_ignored(monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "environment-key-must-not-be-used")
+    assert tracking_mode() == "local"
+
 
 
 def test_online_logger_streams_diagnostics_and_artifacts(monkeypatch, tmp_path):
-    monkeypatch.setenv("WANDB_API_KEY", "test-key")
     run = FakeRun()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb_module(run))
-    logger = WandbLogger(project="test", run_name="online", config={"x": 1}, run_dir=tmp_path, mode="auto")
+    logger = WandbLogger(project="test", run_name="online", config={"x": 1}, run_dir=tmp_path, api_key="test-key", mode="auto")
     assert logger.online is True
 
     logger.log({"train/return_mean": 3.0}, step=2)
@@ -106,15 +109,13 @@ def test_online_logger_streams_diagnostics_and_artifacts(monkeypatch, tmp_path):
 
 
 def test_wandb_log_failure_falls_back_without_raising(monkeypatch, tmp_path):
-    monkeypatch.setenv("WANDB_API_KEY", "test-key")
-
     class BrokenRun(FakeRun):
         def log(self, payload, step=None):
             raise RuntimeError("network down")
 
     run = BrokenRun()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb_module(run))
-    logger = WandbLogger(project="test", run_name="broken", config={}, run_dir=tmp_path, mode="auto")
+    logger = WandbLogger(project="test", run_name="broken", config={}, run_dir=tmp_path, api_key="test-key", mode="auto")
     logger.log({"train/reward": 1.0}, step=1)
     assert logger.online is False
     assert logger.mode == "local"

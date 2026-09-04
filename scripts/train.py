@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import os
-
 from uav_search.runner.train import train_experiment
 
 
@@ -18,15 +16,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--amp", choices=["auto", "on", "off"], default="auto", help="Mixed precision policy for CUDA")
     p.add_argument("--deterministic", action="store_true", help="Use deterministic PyTorch kernels when available (slower)")
     p.add_argument("--output-root", default="runs", help="Local mirror/fallback directory")
-    p.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "uav-search-paper-baselines"))
-    p.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY"), help="Optional W&B user/team; default comes from your W&B account")
+    p.add_argument("--wandb-api-key", default=None, help="W&B API key passed directly to this process")
+    p.add_argument("--wandb-project", default="uav-search-paper-baselines")
+    p.add_argument("--wandb-entity", default=None, help="Optional W&B user/team")
     p.add_argument(
         "--wandb-mode",
         choices=["auto", "online", "offline", "disabled"],
         default="auto",
-        help="auto: online when WANDB_API_KEY exists, otherwise local; offline creates a syncable W&B offline run",
+        help="auto: online when --wandb-api-key is provided, otherwise local",
     )
-    p.add_argument("--local-only", action="store_true", help="Never connect to W&B even if WANDB_API_KEY exists")
+    p.add_argument("--local-only", action="store_true", help="Never connect to W&B")
     p.add_argument("--run-name", default=None)
     return p
 
@@ -43,6 +42,7 @@ def main() -> None:
         output_root=a.output_root,
         wandb=False if a.local_only else None,
         wandb_project=a.wandb_project,
+        wandb_api_key=a.wandb_api_key,
         wandb_entity=a.wandb_entity,
         run_name=a.run_name,
         deterministic=a.deterministic,

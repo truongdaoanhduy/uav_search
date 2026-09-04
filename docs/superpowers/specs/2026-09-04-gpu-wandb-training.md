@@ -1,7 +1,7 @@
 # GPU-Generic Fast Training + W&B Tracking Spec
 
 ## Goal
-Optimize MASAC/MATD3/MADDPG execution speed without changing the paper-facing environment, reward definitions, episode length, replay/update ratio, or algorithm equations; support CPU and arbitrary CUDA GPUs; make W&B the online tracking destination when `WANDB_API_KEY` exists, with complete local fallback otherwise.
+Optimize MASAC/MATD3/MADDPG execution speed without changing the paper-facing environment, reward definitions, episode length, replay/update ratio, or algorithm equations; support CPU and arbitrary CUDA GPUs; make W&B the online tracking destination when a token is passed with `--wandb-api-key`, with complete local fallback otherwise.
 
 ## Runtime behavior
 - `--device auto` selects CUDA when available, otherwise CPU.
@@ -15,7 +15,7 @@ Optimize MASAC/MATD3/MADDPG execution speed without changing the paper-facing en
 
 ## Tracking behavior
 - No hard-coded W&B API key.
-- If `WANDB_API_KEY` exists, initialize W&B online automatically unless explicitly disabled for tests.
+- If `--wandb-api-key` is provided, authenticate with `wandb.login()` and initialize W&B online unless explicitly disabled for tests.
 - If no key exists, training continues and logs to the local run directory.
 - W&B receives training episode metrics, update metrics, performance metrics, system/device metadata, low-metric episodes, exceptions, plots, trajectory media, configs, summaries, and checkpoints/artifacts.
 - A W&B outage must not destroy local records or checkpointing; local logging is always written first.

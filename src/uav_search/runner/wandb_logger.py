@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -15,8 +14,7 @@ def tracking_mode(api_key: str | None = None, requested: str = "auto") -> str:
         return "local"
     if requested == "offline":
         return "offline"
-    key = api_key if api_key is not None else os.environ.get("WANDB_API_KEY")
-    has_key = bool(key and key.strip())
+    has_key = bool(api_key and api_key.strip())
     if requested == "online":
         return "online" if has_key else "local"
     return "online" if has_key else "local"
@@ -37,6 +35,7 @@ class WandbLogger:
         run_name: str,
         config: dict[str, Any],
         run_dir: str | Path,
+        api_key: str | None = None,
         mode: str = "auto",
         entity: str | None = None,
         enabled: bool | None = None,
@@ -48,7 +47,7 @@ class WandbLogger:
         if enabled is False:
             mode = "disabled"
         self.requested_mode = str(mode).lower()
-        self.mode = tracking_mode(requested=self.requested_mode)
+        self.mode = tracking_mode(api_key=api_key, requested=self.requested_mode)
         self.active = False
         self.online = False
         self.run = None
@@ -63,6 +62,8 @@ class WandbLogger:
             import wandb
 
             self._wandb = wandb
+            if self.mode == "online":
+                wandb.login(key=api_key, relogin=True)
             kwargs: dict[str, Any] = {
                 "project": project,
                 "name": run_name,
