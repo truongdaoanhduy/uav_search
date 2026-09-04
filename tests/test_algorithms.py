@@ -41,6 +41,7 @@ def test_algorithm_action_update_and_checkpoint_roundtrip(name, tmp_path):
         if key.endswith("loss"):
             assert np.isfinite(value), (key, value)
 
+    assert "amp_scaler" in algo.checkpoint()
     ckpt = tmp_path / f"{name}.pt"
     algo.save(ckpt)
     clone = make_algorithm(name, env, cfg, device="cpu", seed=99)
@@ -72,3 +73,15 @@ def test_action_inference_batches_each_agent_type_once(name):
             hook.remove()
 
     assert calls == {"fixed": 1, "rotor": 1}
+
+
+@pytest.mark.parametrize("name", ["maddpg", "matd3", "masac"])
+def test_cpu_runtime_profile_keeps_amp_disabled(name):
+    cfg = deepcopy(load_config(name, "f1_m5"))
+    cfg["runtime"]["amp_mode"] = "auto"
+    cfg["runtime"]["deterministic"] = False
+    env = PaperUAVEnv(cfg, seed=13)
+    algo = make_algorithm(name, env, cfg, device="cpu", seed=13)
+    assert algo.runtime_profile.device.type == "cpu"
+    assert algo.runtime_profile.amp_enabled is False
+    assert algo.scaler.is_enabled() is False

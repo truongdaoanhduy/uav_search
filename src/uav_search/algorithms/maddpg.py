@@ -49,7 +49,9 @@ class MADDPG(BaseOffPolicy):
     @torch.no_grad()
     def act(self, obs: np.ndarray, explore: bool = True) -> np.ndarray:
         x = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-        actions = self._actions_tensor(x, target=False).squeeze(0).cpu().numpy()
+        with self.autocast():
+            actions = self._actions_tensor(x, target=False)
+        actions = actions.squeeze(0).float().cpu().numpy()
         if explore:
             actions = actions + self.rng.normal(0.0, self.exploration_noise, size=actions.shape)
         return np.clip(actions, -1.0, 1.0).astype(np.float32)
@@ -57,33 +59,30 @@ class MADDPG(BaseOffPolicy):
     def update(self) -> dict[str, float]:
         if len(self.replay) < self.batch_size:
             return {}
-        batch = self.replay.sample(self.batch_size, self.device)
+        batch = self.replay.sample(self.batch_size, self.device, non_blocking=self.non_blocking)
         global_obs = self._global(batch.obs)
         global_next = self._global(batch.next_obs)
         joint_action = batch.actions.flatten(start_dim=1)
-        with torch.no_grad():
+        with torch.no_grad(), self.autocast():
             next_actions = self._actions_tensor(batch.next_obs, target=True).flatten(start_dim=1)
             target_q = self.target_critic(global_next, next_actions)
             y = batch.rewards + self.gamma * (1.0 - batch.dones) * target_q
-        q = self.critic(global_obs, joint_action)
-        critic_loss = torch.nn.functional.mse_loss(q, y)
-        self.critic_opt.zero_grad(set_to_none=True)
-        critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 10.0)
-        self.critic_opt.step()
+        with self.autocast():
+            q = self.critic(global_obs, joint_action)
+            critic_loss = torch.nn.functional.mse_loss(q, y)
+        self.optimizer_step(critic_loss, self.critic_opt, self.critic.parameters())
 
-        current_actions = self._actions_tensor(batch.obs, target=False).flatten(start_dim=1)
-        actor_loss = -self.critic(global_obs, current_actions).mean()
-        self.actor_opt.zero_grad(set_to_none=True)
-        actor_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actors.parameters(), 10.0)
-        self.actor_opt.step()
+        with self.autocast():
+            current_actions = self._actions_tensor(batch.obs, target=False).flatten(start_dim=1)
+            actor_loss = -self.critic(global_obs, current_actions).mean()
+        self.optimizer_step(actor_loss, self.actor_opt, self.actors.parameters())
+        self.finish_optimizer_steps()
 
         soft_update(self.target_critic, self.critic, self.tau)
         for key in self.actors:
             soft_update(self.target_actors[key], self.actors[key], self.tau)
         self.update_step += 1
-        return {"critic_loss": float(critic_loss.item()), "actor_loss": float(actor_loss.item())}
+        return {"critic_loss": float(critic_loss.detach().float().item()), "actor_loss": float(actor_loss.detach().float().item())}
 
     def checkpoint(self) -> dict[str, Any]:
         return {
@@ -95,6 +94,7 @@ class MADDPG(BaseOffPolicy):
             "target_critic": self.target_critic.state_dict(),
             "actor_opt": self.actor_opt.state_dict(),
             "critic_opt": self.critic_opt.state_dict(),
+            "amp_scaler": self.scaler.state_dict(),
             "update_step": self.update_step,
         }
 
@@ -107,4 +107,6 @@ class MADDPG(BaseOffPolicy):
             self.actor_opt.load_state_dict(p["actor_opt"])
         if "critic_opt" in p:
             self.critic_opt.load_state_dict(p["critic_opt"])
+        if "amp_scaler" in p:
+            self.scaler.load_state_dict(p["amp_scaler"])
         self.update_step = int(p.get("update_step", 0))

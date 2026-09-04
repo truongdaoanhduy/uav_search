@@ -29,49 +29,45 @@ class MATD3(MADDPG):
         if len(self.replay) < self.batch_size:
             return {}
         self.update_step += 1
-        b = self.replay.sample(self.batch_size, self.device)
+        b = self.replay.sample(self.batch_size, self.device, non_blocking=self.non_blocking)
         go = self._global(b.obs)
         gn = self._global(b.next_obs)
         ja = b.actions.flatten(start_dim=1)
-        with torch.no_grad():
+        with torch.no_grad(), self.autocast():
             na = self._actions_tensor(b.next_obs, target=True)
             noise = torch.randn_like(na).mul_(self.policy_noise).clamp_(-self.noise_clip, self.noise_clip)
             na = (na + noise).clamp(-1.0, 1.0).flatten(start_dim=1)
             tq1 = self.target_critic(gn, na)
             tq2 = self.target_critic2(gn, na)
             y = b.rewards + self.gamma * (1.0 - b.dones) * torch.minimum(tq1, tq2)
-        q1 = self.critic(go, ja)
-        q2 = self.critic2(go, ja)
-        l1 = torch.nn.functional.mse_loss(q1, y)
-        l2 = torch.nn.functional.mse_loss(q2, y)
-        self.critic_opt.zero_grad(set_to_none=True)
-        l1.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 10.0)
-        self.critic_opt.step()
-        self.critic2_opt.zero_grad(set_to_none=True)
-        l2.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), 10.0)
-        self.critic2_opt.step()
+        with self.autocast():
+            q1 = self.critic(go, ja)
+            q2 = self.critic2(go, ja)
+            l1 = torch.nn.functional.mse_loss(q1, y)
+            l2 = torch.nn.functional.mse_loss(q2, y)
+        self.optimizer_step(l1, self.critic_opt, self.critic.parameters())
+        self.optimizer_step(l2, self.critic2_opt, self.critic2.parameters())
 
         actor_loss_value = 0.0
         actor_updated = 0.0
         if self.update_step % self.policy_delay == 0:
-            ca = self._actions_tensor(b.obs, target=False).flatten(start_dim=1)
-            actor_loss = -self.critic(go, ca).mean()
-            self.actor_opt.zero_grad(set_to_none=True)
-            actor_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.actors.parameters(), 10.0)
-            self.actor_opt.step()
-            actor_loss_value = float(actor_loss.item())
+            with self.autocast():
+                ca = self._actions_tensor(b.obs, target=False).flatten(start_dim=1)
+                actor_loss = -self.critic(go, ca).mean()
+            self.optimizer_step(actor_loss, self.actor_opt, self.actors.parameters())
+            actor_loss_value = float(actor_loss.detach().float().item())
             actor_updated = 1.0
             soft_update(self.target_critic, self.critic, self.tau)
             soft_update(self.target_critic2, self.critic2, self.tau)
             for key in self.actors:
                 soft_update(self.target_actors[key], self.actors[key], self.tau)
+        self.finish_optimizer_steps()
+        l1_value = float(l1.detach().float().item())
+        l2_value = float(l2.detach().float().item())
         return {
-            "critic_loss": float(0.5 * (l1.item() + l2.item())),
-            "critic1_loss": float(l1.item()),
-            "critic2_loss": float(l2.item()),
+            "critic_loss": 0.5 * (l1_value + l2_value),
+            "critic1_loss": l1_value,
+            "critic2_loss": l2_value,
             "actor_loss": actor_loss_value,
             "actor_updated": actor_updated,
         }

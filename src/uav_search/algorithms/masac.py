@@ -60,16 +60,17 @@ class MASAC(BaseOffPolicy):
     @torch.no_grad()
     def act(self, obs: np.ndarray, explore: bool = True) -> np.ndarray:
         x = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-        a, _ = self._sample_actions(x, target=False, deterministic=not explore)
-        return a.squeeze(0).cpu().numpy().astype(np.float32)
+        with self.autocast():
+            a, _ = self._sample_actions(x, target=False, deterministic=not explore)
+        return a.squeeze(0).float().cpu().numpy().astype(np.float32)
 
     def update(self) -> dict[str, float]:
         if len(self.replay) < self.batch_size:
             return {}
-        b = self.replay.sample(self.batch_size, self.device)
+        b = self.replay.sample(self.batch_size, self.device, non_blocking=self.non_blocking)
         go, gn = self._global(b.obs), self._global(b.next_obs)
         ja = b.actions.flatten(start_dim=1)
-        with torch.no_grad():
+        with torch.no_grad(), self.autocast():
             na, nlogp = self._sample_actions(b.next_obs, target=True, deterministic=False)
             tq = torch.minimum(
                 self.target_critic1(gn, na.flatten(start_dim=1)),
@@ -77,37 +78,33 @@ class MASAC(BaseOffPolicy):
             )
             entropy_term = self.alpha * nlogp.squeeze(-1)
             y = b.rewards + self.gamma * (1.0 - b.dones) * (tq - entropy_term)
-        q1, q2 = self.critic1(go, ja), self.critic2(go, ja)
-        l1 = torch.nn.functional.mse_loss(q1, y)
-        l2 = torch.nn.functional.mse_loss(q2, y)
-        self.critic1_opt.zero_grad(set_to_none=True)
-        l1.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic1.parameters(), 10.0)
-        self.critic1_opt.step()
-        self.critic2_opt.zero_grad(set_to_none=True)
-        l2.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), 10.0)
-        self.critic2_opt.step()
+        with self.autocast():
+            q1, q2 = self.critic1(go, ja), self.critic2(go, ja)
+            l1 = torch.nn.functional.mse_loss(q1, y)
+            l2 = torch.nn.functional.mse_loss(q2, y)
+        self.optimizer_step(l1, self.critic1_opt, self.critic1.parameters())
+        self.optimizer_step(l2, self.critic2_opt, self.critic2.parameters())
 
-        ca, logp = self._sample_actions(b.obs, target=False, deterministic=False)
-        cq = torch.minimum(self.critic1(go, ca.flatten(start_dim=1)), self.critic2(go, ca.flatten(start_dim=1)))
-        actor_loss = (self.alpha * logp.squeeze(-1) - cq).mean()
-        self.actor_opt.zero_grad(set_to_none=True)
-        actor_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actors.parameters(), 10.0)
-        self.actor_opt.step()
+        with self.autocast():
+            ca, logp = self._sample_actions(b.obs, target=False, deterministic=False)
+            cq = torch.minimum(self.critic1(go, ca.flatten(start_dim=1)), self.critic2(go, ca.flatten(start_dim=1)))
+            actor_loss = (self.alpha * logp.squeeze(-1) - cq).mean()
+        self.optimizer_step(actor_loss, self.actor_opt, self.actors.parameters())
+        self.finish_optimizer_steps()
 
         soft_update(self.target_critic1, self.critic1, self.tau)
         soft_update(self.target_critic2, self.critic2, self.tau)
         for key in self.actors:
             soft_update(self.target_actors[key], self.actors[key], self.tau)
         self.update_step += 1
+        l1_value = float(l1.detach().float().item())
+        l2_value = float(l2.detach().float().item())
         return {
-            "critic_loss": float(0.5 * (l1.item() + l2.item())),
-            "critic1_loss": float(l1.item()),
-            "critic2_loss": float(l2.item()),
-            "actor_loss": float(actor_loss.item()),
-            "entropy": float((-logp).mean().item()),
+            "critic_loss": 0.5 * (l1_value + l2_value),
+            "critic1_loss": l1_value,
+            "critic2_loss": l2_value,
+            "actor_loss": float(actor_loss.detach().float().item()),
+            "entropy": float((-logp.detach().float()).mean().item()),
             "alpha": self.alpha,
         }
 
@@ -119,6 +116,7 @@ class MASAC(BaseOffPolicy):
             "critic1": self.critic1.state_dict(), "critic2": self.critic2.state_dict(),
             "target_critic1": self.target_critic1.state_dict(), "target_critic2": self.target_critic2.state_dict(),
             "actor_opt": self.actor_opt.state_dict(), "critic1_opt": self.critic1_opt.state_dict(), "critic2_opt": self.critic2_opt.state_dict(),
+            "amp_scaler": self.scaler.state_dict(),
             "update_step": self.update_step,
         }
 
@@ -131,4 +129,6 @@ class MASAC(BaseOffPolicy):
         for key, opt in (("actor_opt", self.actor_opt), ("critic1_opt", self.critic1_opt), ("critic2_opt", self.critic2_opt)):
             if key in p:
                 opt.load_state_dict(p[key])
+        if "amp_scaler" in p:
+            self.scaler.load_state_dict(p["amp_scaler"])
         self.update_step = int(p.get("update_step", 0))
