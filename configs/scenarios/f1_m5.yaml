@@ -1,0 +1,6 @@
+scenario:
+  name: f1_m5
+  fixed_wing: 1
+  multirotor: 5
+  targets: 5   # ASSUMED: target count is not explicitly stated for Fig. 7
+  obstacles: 6 # ASSUMED

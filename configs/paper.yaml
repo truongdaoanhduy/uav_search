@@ -1,0 +1,65 @@
+paper:
+  provenance: PAPER_EXPLICIT
+  area_size_m: 5000
+  fixed_wing_mass_kg: 10
+  multirotor_mass_kg: 1
+  communication_power_w: 5
+  min_comm_rate_bps: 1000000
+  fixed_speed_max_mps: 40
+  fixed_speed_min_mps: 10
+  max_accel_mps2: 8
+  multirotor_speed_max_mps: 10
+  safe_battery_pct: 10
+  energy_reward_scale: 0.2
+  training_rounds: 50000
+  episode_steps: 50
+  learning_rate: 0.001
+  gamma: 0.99
+  soft_update_epsilon: 0.99
+
+assumed:
+  provenance: ASSUMED
+  dt_s: 1.0
+  fixed_altitude_m: 200.0
+  multirotor_altitude_m: 60.0
+  n_targets: 5
+  n_obstacles: 8
+  obstacle_radius_min_m: 80.0
+  obstacle_radius_max_m: 220.0
+  target_detect_m: 700.0
+  target_found_m: 100.0
+  fixed_detect_m: 1500.0
+  safety_distance_m: 100.0
+  fixed_turn_rate_rad_s: 0.35
+  battery_capacity_j: 1000000.0
+  hover_power_w: 120.0
+  blade_drag_coeff: 0.08
+  frame_drag_coeff: 0.00002
+  carrier_hz: 2400000000.0
+  bandwidth_hz: 1000000.0
+  noise_power_w: 4.0e-14
+  los_a: 9.61
+  los_b: 0.16
+  los_extra_loss_db: 1.0
+  nlos_extra_loss_db: 25.0
+  comm_reward_max: 5.0
+  comm_rate_max_bps: 10000000.0
+  safety_reward_coeff: 8.0
+  search_reward_coeff: 20.0
+  reward_distance_epsilon_km: 0.1
+  boundary_penalty: 5.0
+  obstacle_penalty: 15.0
+
+runtime:
+  seed: 0
+  episodes: 300
+  warmup_steps: 256
+  replay_size: 100000
+  batch_size: 128
+  hidden_sizes: [128, 128]
+  update_after: 256
+  update_every: 1
+  gradient_steps: 1
+  exploration_noise: 0.15
+  low_episode_window: 20
+  save_best: true

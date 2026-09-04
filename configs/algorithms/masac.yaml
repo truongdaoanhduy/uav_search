@@ -1,0 +1,9 @@
+algorithm:
+  name: masac
+  gamma: 0.99
+  tau: 0.01
+  actor_lr: 0.001
+  critic_lr: 0.001
+  alpha: 0.2
+  log_std_min: -5.0
+  log_std_max: 2.0
