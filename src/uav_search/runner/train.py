@@ -14,18 +14,11 @@ import yaml
 from uav_search.algorithms.factory import make_algorithm
 from uav_search.config import load_config
 from uav_search.envs.paper_env import PaperUAVEnv
+from uav_search.runtime import configure_runtime, resolve_device
 
 from .logging import RunLogger
 from .visualize import plot_training_curves, plot_trajectory
 from .wandb_logger import WandbLogger
-
-
-def resolve_device(device: str) -> str:
-    if device == "auto":
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    if device.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError("CUDA requested but torch.cuda.is_available() is False")
-    return device
 
 
 def set_global_seed(seed: int) -> None:
@@ -34,7 +27,6 @@ def set_global_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 def _obs_array(obs_dict: dict[str, np.ndarray], agents: list[str]) -> np.ndarray:
@@ -93,6 +85,8 @@ def train_experiment(
     wandb_project: str = "uav-search-paper-baselines",
     run_name: str | None = None,
     runtime_overrides: dict[str, Any] | None = None,
+    deterministic: bool = False,
+    amp_mode: str = "auto",
 ) -> Path:
     cfg = deepcopy(load_config(algorithm, scenario))
     cfg["runtime"]["seed"] = int(seed)
@@ -103,8 +97,12 @@ def train_experiment(
     if steps is not None:
         cfg["runtime"]["episode_steps_override"] = int(steps)
         cfg["paper"]["episode_steps"] = int(steps)
-    device = resolve_device(device)
+    profile = configure_runtime(resolve_device(device), deterministic=deterministic, amp_mode=amp_mode)
+    device = str(profile.device)
     cfg["runtime"]["resolved_device"] = device
+    cfg["runtime"]["deterministic"] = bool(deterministic)
+    cfg["runtime"]["amp_mode"] = str(amp_mode)
+    cfg["runtime"]["runtime_profile"] = profile.as_dict()
     set_global_seed(seed)
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
