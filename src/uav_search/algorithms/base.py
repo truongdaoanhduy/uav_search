@@ -19,6 +19,10 @@ class BaseOffPolicy:
         self.agent_types = ["fixed" if int(t) == 0 else "rotor" for t in env.agent_types]
         self.fixed_indices = [i for i, t in enumerate(self.agent_types) if t == "fixed"]
         self.rotor_indices = [i for i, t in enumerate(self.agent_types) if t == "rotor"]
+        self.type_indices = {
+            "fixed": torch.as_tensor(self.fixed_indices, dtype=torch.long, device=self.device),
+            "rotor": torch.as_tensor(self.rotor_indices, dtype=torch.long, device=self.device),
+        }
         self.gamma = float(cfg["algorithm"]["gamma"])
         self.tau = float(cfg["algorithm"]["tau"])
         self.batch_size = int(cfg["runtime"]["batch_size"])
@@ -26,8 +30,14 @@ class BaseOffPolicy:
         self.rng = np.random.default_rng(seed)
         torch.manual_seed(seed)
         self.replay = ReplayBuffer(
-            int(cfg["runtime"]["replay_size"]), self.n_agents, self.obs_dim, self.action_dim, seed=seed
+            int(cfg["runtime"]["replay_size"]),
+            self.n_agents,
+            self.obs_dim,
+            self.action_dim,
+            seed=seed,
+            pin_memory=self.device.type == "cuda",
         )
+        self.non_blocking = self.device.type == "cuda"
         self.update_step = 0
 
     def store(self, obs, actions, rewards, next_obs, dones) -> None:

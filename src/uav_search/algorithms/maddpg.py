@@ -10,6 +10,7 @@ from torch import nn
 from .base import BaseOffPolicy
 from .common import hard_update, soft_update
 from .networks import CentralizedCritic, DeterministicActor
+from uav_search.runtime import make_adam
 
 
 class MADDPG(BaseOffPolicy):
@@ -26,13 +27,24 @@ class MADDPG(BaseOffPolicy):
         ad = self.n_agents * self.action_dim
         self.critic = CentralizedCritic(gd, ad, self.n_agents, self.hidden_sizes).to(self.device)
         self.target_critic = deepcopy(self.critic).to(self.device)
-        self.actor_opt = torch.optim.Adam(self.actors.parameters(), lr=float(cfg["algorithm"]["actor_lr"]))
-        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=float(cfg["algorithm"]["critic_lr"]))
+        self.actor_opt = make_adam(self.actors.parameters(), lr=float(cfg["algorithm"]["actor_lr"]), device=self.device)
+        self.critic_opt = make_adam(self.critic.parameters(), lr=float(cfg["algorithm"]["critic_lr"]), device=self.device)
         self.exploration_noise = float(cfg["runtime"]["exploration_noise"])
 
     def _actions_tensor(self, obs: torch.Tensor, target: bool = False) -> torch.Tensor:
         actors = self.target_actors if target else self.actors
-        return torch.stack([actors[t](obs[:, i, :]) for i, t in enumerate(self.agent_types)], dim=1)
+        batch_size = obs.shape[0]
+        outputs: list[torch.Tensor | None] = [None] * self.n_agents
+        for agent_type, indices in (("fixed", self.fixed_indices), ("rotor", self.rotor_indices)):
+            if not indices:
+                continue
+            typed_obs = obs[:, indices, :].reshape(-1, self.obs_dim)
+            typed_actions = actors[agent_type](typed_obs).reshape(batch_size, len(indices), self.action_dim)
+            for local_i, agent_i in enumerate(indices):
+                outputs[agent_i] = typed_actions[:, local_i, :]
+        if any(x is None for x in outputs):
+            raise RuntimeError("Unknown agent type while batching actor outputs")
+        return torch.stack([x for x in outputs if x is not None], dim=1)
 
     @torch.no_grad()
     def act(self, obs: np.ndarray, explore: bool = True) -> np.ndarray:

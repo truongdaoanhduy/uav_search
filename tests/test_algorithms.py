@@ -48,3 +48,27 @@ def test_algorithm_action_update_and_checkpoint_roundtrip(name, tmp_path):
     a1 = algo.act(obs, explore=False)
     a2 = clone.act(obs, explore=False)
     assert np.allclose(a1, a2, atol=1e-6)
+
+
+@pytest.mark.parametrize("name", ["maddpg", "matd3", "masac"])
+def test_action_inference_batches_each_agent_type_once(name):
+    cfg = deepcopy(load_config(name, "f1_m5"))
+    cfg["runtime"]["hidden_sizes"] = [16, 16]
+    env = PaperUAVEnv(cfg, seed=7)
+    obs_dict, _ = env.reset(seed=7)
+    obs = np.stack([obs_dict[a] for a in env.agents])
+    algo = make_algorithm(name, env, cfg, device="cpu", seed=7)
+
+    calls = {"fixed": 0, "rotor": 0}
+    hooks = []
+    for key in calls:
+        hooks.append(algo.actors[key].register_forward_hook(
+            lambda module, args, output, key=key: calls.__setitem__(key, calls[key] + 1)
+        ))
+    try:
+        algo.act(obs, explore=False)
+    finally:
+        for hook in hooks:
+            hook.remove()
+
+    assert calls == {"fixed": 1, "rotor": 1}

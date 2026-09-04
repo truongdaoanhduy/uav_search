@@ -10,6 +10,7 @@ from torch import nn
 from .base import BaseOffPolicy
 from .common import soft_update
 from .networks import CentralizedCritic, GaussianActor
+from uav_search.runtime import make_adam
 
 
 class MASAC(BaseOffPolicy):
@@ -30,18 +31,31 @@ class MASAC(BaseOffPolicy):
         self.critic2 = CentralizedCritic(gd, ad, self.n_agents, self.hidden_sizes).to(self.device)
         self.target_critic1 = deepcopy(self.critic1).to(self.device)
         self.target_critic2 = deepcopy(self.critic2).to(self.device)
-        self.actor_opt = torch.optim.Adam(self.actors.parameters(), lr=float(a["actor_lr"]))
-        self.critic1_opt = torch.optim.Adam(self.critic1.parameters(), lr=float(a["critic_lr"]))
-        self.critic2_opt = torch.optim.Adam(self.critic2.parameters(), lr=float(a["critic_lr"]))
+        self.actor_opt = make_adam(self.actors.parameters(), lr=float(a["actor_lr"]), device=self.device)
+        self.critic1_opt = make_adam(self.critic1.parameters(), lr=float(a["critic_lr"]), device=self.device)
+        self.critic2_opt = make_adam(self.critic2.parameters(), lr=float(a["critic_lr"]), device=self.device)
 
     def _sample_actions(self, obs: torch.Tensor, target: bool = False, deterministic: bool = False):
         actors = self.target_actors if target else self.actors
-        actions, logps = [], []
-        for i, t in enumerate(self.agent_types):
-            ai, lp = actors[t].sample(obs[:, i, :], deterministic=deterministic)
-            actions.append(ai)
-            logps.append(lp)
-        return torch.stack(actions, dim=1), torch.stack(logps, dim=1)
+        batch_size = obs.shape[0]
+        actions: list[torch.Tensor | None] = [None] * self.n_agents
+        logps: list[torch.Tensor | None] = [None] * self.n_agents
+        for agent_type, indices in (("fixed", self.fixed_indices), ("rotor", self.rotor_indices)):
+            if not indices:
+                continue
+            typed_obs = obs[:, indices, :].reshape(-1, self.obs_dim)
+            typed_actions, typed_logps = actors[agent_type].sample(typed_obs, deterministic=deterministic)
+            typed_actions = typed_actions.reshape(batch_size, len(indices), self.action_dim)
+            typed_logps = typed_logps.reshape(batch_size, len(indices), 1)
+            for local_i, agent_i in enumerate(indices):
+                actions[agent_i] = typed_actions[:, local_i, :]
+                logps[agent_i] = typed_logps[:, local_i, :]
+        if any(x is None for x in actions) or any(x is None for x in logps):
+            raise RuntimeError("Unknown agent type while batching actor outputs")
+        return (
+            torch.stack([x for x in actions if x is not None], dim=1),
+            torch.stack([x for x in logps if x is not None], dim=1),
+        )
 
     @torch.no_grad()
     def act(self, obs: np.ndarray, explore: bool = True) -> np.ndarray:

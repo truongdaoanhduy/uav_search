@@ -8,6 +8,7 @@ import torch
 from .common import soft_update
 from .maddpg import MADDPG
 from .networks import CentralizedCritic
+from uav_search.runtime import make_adam
 
 
 class MATD3(MADDPG):
@@ -19,7 +20,7 @@ class MATD3(MADDPG):
         ad = self.n_agents * self.action_dim
         self.critic2 = CentralizedCritic(gd, ad, self.n_agents, self.hidden_sizes).to(self.device)
         self.target_critic2 = deepcopy(self.critic2).to(self.device)
-        self.critic2_opt = torch.optim.Adam(self.critic2.parameters(), lr=float(cfg["algorithm"]["critic_lr"]))
+        self.critic2_opt = make_adam(self.critic2.parameters(), lr=float(cfg["algorithm"]["critic_lr"]), device=self.device)
         self.policy_noise = float(cfg["algorithm"]["policy_noise"])
         self.noise_clip = float(cfg["algorithm"]["noise_clip"])
         self.policy_delay = int(cfg["algorithm"]["policy_delay"])

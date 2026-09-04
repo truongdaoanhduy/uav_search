@@ -20,6 +20,14 @@ def test_replay_buffer_roundtrip_shapes():
     assert batch.dones.shape == (4, 3)
 
 
+def test_replay_buffer_uses_preallocated_torch_storage():
+    rb = ReplayBuffer(16, n_agents=3, obs_dim=7, action_dim=2, seed=1)
+    assert isinstance(rb.obs, torch.Tensor)
+    assert isinstance(rb.actions, torch.Tensor)
+    assert rb.obs.device.type == "cpu"
+    assert rb.obs.dtype == torch.float32
+
+
 def test_networks_return_bounded_actions_and_agent_qs():
     x = torch.randn(5, 7)
     det = DeterministicActor(7, 2, [32, 32])
