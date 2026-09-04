@@ -237,14 +237,6 @@ class PaperUAVEnv:
                 if np.linalg.norm(self.positions[i] - self.positions[j]) <= self.assumed["safety_distance_m"]:
                     self.collision_count += 1
 
-        # A target is confirmed only by a multi-rotor UAV.
-        for k in range(self.n_targets):
-            if self.target_found[k]:
-                continue
-            d = np.linalg.norm(self.positions[self.multirotor_indices, :2] - self.targets[k], axis=1)
-            if len(d) and float(np.min(d)) <= self.assumed["target_found_m"]:
-                self.target_found[k] = True
-
         self._refresh_links()
         broken_mask = self.last_rates_bps < self.paper["min_comm_rate_bps"]
         self.cumulative_broken_time += broken_mask.astype(np.float64) * self.dt
@@ -269,6 +261,14 @@ class PaperUAVEnv:
                 rewards[name] = float(r_comm + r_power + safety + self._task_reward(i, fixed=False))
             else:
                 rewards[name] = float(safety + self._task_reward(i, fixed=True))
+
+        # Confirm only after computing Eq. (24), so the discovering UAV receives zeta on this step.
+        for k in range(self.n_targets):
+            if self.target_found[k]:
+                continue
+            d = np.linalg.norm(self.positions[self.multirotor_indices, :2] - self.targets[k], axis=1)
+            if len(d) and float(np.min(d)) <= self.assumed["target_found_m"]:
+                self.target_found[k] = True
 
         self.step_count += 1
         self.trajectory.append(self.positions.copy())

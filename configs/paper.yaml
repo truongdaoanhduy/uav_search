@@ -37,7 +37,7 @@ assumed:
   frame_drag_coeff: 0.00002
   carrier_hz: 2400000000.0
   bandwidth_hz: 1000000.0
-  noise_power_w: 4.0e-14
+  noise_power_w: 1.2e-13
   los_a: 9.61
   los_b: 0.16
   los_extra_loss_db: 1.0

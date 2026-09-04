@@ -49,11 +49,22 @@ def test_target_is_confirmed_when_multirotor_enters_found_radius():
     env = make_env()
     env.reset(seed=3)
     rotor_idx = env.multirotor_indices[0]
+    env.assumed["search_reward_coeff"] = 1000.0
+    env.targets[:] = np.array([4900.0, 4900.0])
+    env.targets[0] = np.array([500.0, 500.0])
     env.positions[rotor_idx, :2] = env.targets[0]
+    env.positions[env.fixed_indices[0], :2] = np.array([500.0, 1000.0])
+    for k, idx in enumerate(env.multirotor_indices[1:], start=1):
+        env.positions[idx, :2] = np.array([2500.0 + 250.0 * k, 2500.0])
+    env.obstacles[:, :2] = np.array([4500.0, 4500.0])
+    env.obstacles[:, 2] = 10.0
+    env._refresh_links()
     actions = {agent: np.zeros(2, dtype=np.float32) for agent in env.agents}
-    _, _, _, _, info = env.step(actions)
+    _, rewards, _, _, info = env.step(actions)
     assert env.target_found[0]
     assert info["targets_found"] >= 1
+    # The paper's Eq. (24) awards zeta when a multi-rotor confirms a target.
+    assert rewards[env.agents[rotor_idx]] > 500.0
 
 
 def test_episode_truncates_at_paper_length():
@@ -71,6 +82,7 @@ def test_physical_models_are_monotonic_and_positive():
     far = communication_rate_bps(4000.0, 140.0, cfg)
     assert near > far > 0
     assert near > cfg["paper"]["min_comm_rate_bps"]
+    assert far < cfg["paper"]["min_comm_rate_bps"]
     p0 = multirotor_power_w(0.0, 0.0, cfg)
     pfast = multirotor_power_w(10.0, 4.0, cfg)
     assert pfast > p0 > 0
