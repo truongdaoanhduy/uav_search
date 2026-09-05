@@ -13,7 +13,7 @@ from .train import deterministic_rollout, resolve_device
 from .visualize import plot_trajectory
 
 
-def evaluate_checkpoint(checkpoint: str | Path, episodes: int = 100, device: str = "auto", output_dir: str | Path | None = None) -> dict[str, Any]:
+def evaluate_checkpoint(checkpoint: str | Path, episodes: int = 5000, device: str = "auto", output_dir: str | Path | None = None) -> dict[str, Any]:
     checkpoint = Path(checkpoint)
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     cfg = payload["config"]

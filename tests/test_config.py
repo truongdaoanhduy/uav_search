@@ -69,3 +69,14 @@ def test_pcom_is_paper_explicit_but_a2a_tx_power_is_not():
     # Eq. (6) uses a distinct transmit-power symbol P_tx,u, but the paper
     # does not publish its numeric value. Preserve the current fallback.
     assert cfg["assumed"]["tx_power_w"] == 5.0
+
+
+def test_paper_evaluation_uses_5000_random_test_cases():
+    cfg = load_config("masac", "f1_m5")
+    assert cfg["paper"]["evaluation_cases"] == 5000
+
+
+def test_default_training_rounds_match_paper_table_i():
+    cfg = load_config("masac", "f1_m5")
+    assert cfg["paper"]["training_rounds"] == 50_000
+    assert cfg["runtime"]["episodes"] == 50_000

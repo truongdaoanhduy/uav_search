@@ -12,6 +12,7 @@ paper:
   safe_battery_pct: 10
   energy_reward_scale: 0.2
   training_rounds: 50000
+  evaluation_cases: 5000
   episode_steps: 50
   learning_rate: 0.001
   gamma: 0.99
@@ -58,7 +59,7 @@ assumed:
 
 runtime:
   seed: 0
-  episodes: 300
+  episodes: 50000
   warmup_steps: 256
   replay_size: 100000
   batch_size: 128

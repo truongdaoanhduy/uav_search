@@ -43,6 +43,7 @@ The following are implemented from statements/equations/experimental parameters 
 | Safe battery level | 10% |
 | Energy reward scaling factor | 0.2 |
 | Training rounds reference | 50,000 |
+| Evaluation random test cases | 5,000 |
 | Episode length | 50 steps |
 | Paper learning-rate reference | 0.001 |
 | Reward discount factor | 0.99 |
@@ -144,4 +145,20 @@ After the paper-fidelity rewrite, it is reasonable to say:
 - the **published action and reward definitions** are represented;
 - the two requested small swarm sizes are represented.
 
+The default runtime now also follows the paper's 50,000 training rounds and 5,000 evaluation cases; command-line overrides remain available for short development smoke tests.
+
 It is **not** reasonable to claim exact numerical reproduction of the authors' simulator or reported curves until the unpublished constants and original source code become available.
+
+## 7. Original-paper ambiguities and explicit remaining structural gaps
+
+The final audit against the uploaded IEEE paper identifies several points that must not be presented as exact paper values/behavior:
+
+- **Small-scenario target count:** Fig. 7 explicitly gives only the UAV counts `(1,5)` and `(1,9)`. It does not print the number of targets for those two scenes. The current value `10` is retained as `PAPER_INFERRED`; it is not an explicit paper parameter.
+- **Sensor description is internally inconsistent:** Section III states that multi-rotor UAVs carry RSSI target-signal detectors, while the simulation-design paragraph says fixed-wing UAVs carry signal-detection devices and multi-rotors carry cameras. The baseline therefore must not claim one sensor modality as uniquely specified by the paper.
+- **Large-scale Fig. 9 text contains an internal inconsistency:** the figure caption/plots use `(4,12)` and `(8,24)`, while the prose says "four and six fixed-wing" alongside 12 and 24 multi-rotors. The current project does not implement these expansion scenarios.
+- **Observation/state encoding is not exact:** Eqs. (17)-(20) define type-specific state/observation contents, and the paper later applies importance ranking/masking. The baseline keeps one fixed-size vector for MASAC/MATD3/MADDPG and therefore is not a literal reproduction of those observation vectors.
+- **Sensing-range visibility is not exact:** the paper states that target signal strength/distance is perceived only within sensing range. The current baseline retains a fixed observation layout and should not be claimed to reproduce the authors' exact sensing/masking implementation.
+- **OpenAI MPE backend is not literal:** the paper explicitly says the simulation is based on OpenAI MPE; this repository is a custom Gymnasium/MPE-style environment rather than the authors' MPE source.
+- **3D dynamics are approximated as 2.5D:** the paper defines 3D position/velocity dynamics, but does not publish the numerical constants/control details needed for exact integration. Fixed type-specific altitudes are retained as assumptions.
+
+These points are intentionally left visible instead of being silently filled with guessed values. Parameters for which the paper gives only a symbol/formula but no numerical value are preserved for later source/reference completion.
