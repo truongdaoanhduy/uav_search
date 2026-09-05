@@ -6,6 +6,8 @@ Scenarios:
 - `f1_m5`: 1 fixed-wing + 5 multi-rotor UAVs
 - `f1_m9`: 1 fixed-wing + 9 multi-rotor UAVs
 
+Paper-scenario fidelity and the remaining unpublished-parameter gaps are documented in [`docs/PAPER_FIDELITY.md`](docs/PAPER_FIDELITY.md). The environment matches the paper where values/equations are published, but it does not claim byte-for-byte reproduction of the authors' unpublished simulator.
+
 ## Cài đặt
 
 ```bash
