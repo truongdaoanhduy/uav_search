@@ -117,7 +117,7 @@ Because these values are absent from the original paper, matching its reward cur
 
 ### 2.5D flight
 
-The paper writes 3D state/dynamics equations, but its action definition does not publish an altitude control action or simulation altitude values. The baseline therefore keeps type-specific altitude fixed and optimizes planar trajectories. This is a reproduction gap, not a paper-explicit choice.
+The paper writes 3D state/dynamics equations, but the software-simulation figures and trajectory plots are planar, the physical validation first sends UAVs to designated cruising altitudes before trajectory optimization, and the original OpenAI MPE world is fundamentally a 2-D particle world. The baseline therefore keeps type-specific altitude fixed and optimizes planar trajectories. This is a **plausible implementation inference**, not a paper-explicit numerical choice: the fixed/multi-rotor altitude values themselves remain unpublished and assumed.
 
 ### Fixed-wing thrust dynamics
 
@@ -133,7 +133,7 @@ The baseline now follows the contents of Eqs. (17)-(20) using a common padded ve
 
 ### OpenAI MPE
 
-The paper states that simulation is based on the OpenAI Multi-Agent Particle Environment. This repository keeps a custom MPE-style parallel world API rather than importing a stock OpenAI MPE scenario, because the paper requires heterogeneous fixed-wing/multi-rotor dynamics and actions that stock MPE scenarios do not provide. The original MPE design itself expects scenario-specific world/reset/reward/observation functions, so a custom scenario/world implementation is consistent with how MPE is extended, but it is not byte-for-byte the authors' unpublished environment code.
+The paper states that simulation is based on the OpenAI Multi-Agent Particle Environment. The original MPE provides a generic particle-world/scenario framework rather than this paper's heterogeneous UAV scenario, and its maintained successor MPE2 does not contain Ao et al.'s unpublished custom environment. This repository therefore keeps a custom MPE-style parallel world API. That choice is structurally consistent with scenario-specific MPE extension, but it is not byte-for-byte the authors' unpublished MPE implementation.
 
 ## 6. What can and cannot be claimed
 
