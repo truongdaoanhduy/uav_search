@@ -84,3 +84,53 @@ def test_physical_models_are_monotonic_and_positive():
     p0 = multirotor_power_w(0.0, 0.0, cfg)
     pfast = multirotor_power_w(10.0, 4.0, cfg)
     assert pfast > p0 > 0
+
+
+def test_interference_reduces_a2a_rate():
+    cfg = load_config("masac", "f1_m5")
+    clean = communication_rate_bps(500.0, 140.0, cfg, interference_power_w=0.0)
+    interfered = communication_rate_bps(500.0, 140.0, cfg, interference_power_w=1e-10)
+    assert interfered < clean
+
+
+def test_one_leader_star_assignment_and_fixed_wing_mesh():
+    env = make_env(seed=1)
+    assert np.all(env.rotor_leaders == env.fixed_indices[0])
+
+    cfg = load_config("masac", "f1_m5")
+    cfg["scenario"]["fixed_wing"] = 2
+    cfg["scenario"]["multirotor"] = 4
+    env2 = PaperUAVEnv(cfg, seed=1)
+    env2.positions[:] = np.array([
+        [1000.0, 1000.0, env2.assumed["fixed_altitude_m"]],
+        [1100.0, 1000.0, env2.assumed["fixed_altitude_m"]],
+        [4000.0, 4000.0, env2.assumed["multirotor_altitude_m"]],
+        [4200.0, 4000.0, env2.assumed["multirotor_altitude_m"]],
+        [4000.0, 4200.0, env2.assumed["multirotor_altitude_m"]],
+        [4200.0, 4200.0, env2.assumed["multirotor_altitude_m"]],
+    ])
+    env2._refresh_links()
+    assert env2.last_adjacency[0, 1] == 1
+    assert env2.last_adjacency[1, 0] == 1
+    assert set(env2.rotor_leaders.tolist()).issubset(set(env2.fixed_indices))
+
+
+def test_rotor_adjacency_only_uses_its_formation_leader():
+    cfg = load_config("masac", "f1_m5")
+    cfg["scenario"]["fixed_wing"] = 2
+    cfg["scenario"]["multirotor"] = 2
+    env = PaperUAVEnv(cfg, seed=2)
+    # With two leaders and two rotors, deterministic balanced assignment is fixed_0, fixed_1.
+    assert env.rotor_leaders.tolist() == [0, 1]
+    for local_rotor, rotor_idx in enumerate(env.multirotor_indices):
+        leader = env.rotor_leaders[local_rotor]
+        other_leader = 1 - leader
+        # Even if the other leader is physically near, it is not a formation edge.
+        env.positions[rotor_idx, :2] = env.positions[other_leader, :2]
+    env._refresh_links()
+    for local_rotor, rotor_idx in enumerate(env.multirotor_indices):
+        leader = env.rotor_leaders[local_rotor]
+        for fi in env.fixed_indices:
+            if fi != leader:
+                assert env.last_adjacency[rotor_idx, fi] == 0
+                assert env.last_adjacency[fi, rotor_idx] == 0

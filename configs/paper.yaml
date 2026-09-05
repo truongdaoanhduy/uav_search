@@ -49,13 +49,6 @@ assumed:
   hover_power_w: 120.0
   blade_drag_coeff: 0.08
   frame_drag_coeff: 0.00002
-  carrier_hz: 700000000.0
-  bandwidth_hz: 1000000.0
-  noise_power_w: 1.0e-13
-  los_a: 11.95
-  los_b: 0.14
-  los_extra_loss_db: 1.0
-  nlos_extra_loss_db: 20.0
   comm_reward_max: 5.0
   comm_rate_max_bps: 10000000.0
   safety_reward_coeff: 8.0

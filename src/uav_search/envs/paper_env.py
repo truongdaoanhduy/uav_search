@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 from gymnasium.spaces import Box
 
-from .models import circle_collision, communication_rate_bps, multirotor_power_w
+from .models import circle_collision, communication_rate_bps, multirotor_power_w, path_gain_linear
 
 
 class PaperUAVEnv:
@@ -34,6 +34,16 @@ class PaperUAVEnv:
         self.fixed_indices = list(range(self.n_fixed))
         self.multirotor_indices = list(range(self.n_fixed, self.n_agents))
         self.agent_types = np.array([0] * self.n_fixed + [1] * self.n_rotor, dtype=np.int64)  # 0=fixed, 1=rotor
+        if self.n_fixed:
+            # Formation membership is required by the paper's star topology.  For the
+            # one-leader experiments this is exact; for multiple leaders, a balanced
+            # deterministic assignment is used because the paper does not publish the
+            # cluster-assignment procedure.
+            self.rotor_leaders = np.asarray(
+                [self.fixed_indices[r % self.n_fixed] for r in range(self.n_rotor)], dtype=np.int64
+            )
+        else:
+            self.rotor_leaders = np.full(self.n_rotor, -1, dtype=np.int64)
         # own 11 + every other UAV 7 + target 4 + obstacle 4
         self.obs_dim = 11 + (self.n_agents - 1) * 7 + self.n_targets * 4 + self.n_obstacles * 4
         self.observation_space = Box(-np.inf, np.inf, shape=(self.obs_dim,), dtype=np.float32)
@@ -73,6 +83,8 @@ class PaperUAVEnv:
         self.step_count = 0
         self.cumulative_broken_time = np.zeros(self.n_rotor, dtype=np.float64)
         self.last_rates_bps = np.zeros(self.n_rotor, dtype=np.float64)
+        self.last_pair_rates_bps = np.zeros((self.n_agents, self.n_agents), dtype=np.float64)
+        self.last_adjacency = np.zeros((self.n_agents, self.n_agents), dtype=np.int8)
         self.total_energy_used_j = 0.0
         self.collision_count = 0
         self.obstacle_hits = 0
@@ -81,18 +93,66 @@ class PaperUAVEnv:
         self._refresh_links()
         return self._observations(), self._info(step_energy_j=0.0, action_saturation=0.0)
 
-    def _nearest_fixed_rate(self, rotor_idx: int) -> float:
-        if not self.fixed_indices:
-            return 0.0
-        rates = []
-        for fi in self.fixed_indices:
-            delta = self.positions[rotor_idx] - self.positions[fi]
-            rates.append(communication_rate_bps(np.linalg.norm(delta[:2]), delta[2], self.cfg))
-        return max(rates)
+    def _candidate_links(self) -> np.ndarray:
+        """Paper topology: rotor-leader star edges plus fixed-wing leader mesh edges."""
+        candidate = np.zeros((self.n_agents, self.n_agents), dtype=bool)
+        for a, fi in enumerate(self.fixed_indices):
+            for fj in self.fixed_indices[a + 1 :]:
+                candidate[fi, fj] = True
+                candidate[fj, fi] = True
+        for local_idx, rotor_idx in enumerate(self.multirotor_indices):
+            leader = int(self.rotor_leaders[local_idx])
+            if leader >= 0:
+                candidate[rotor_idx, leader] = True
+                candidate[leader, rotor_idx] = True
+        return candidate
+
+    def _received_power_w(self, receiver: int, transmitter: int) -> float:
+        delta = self.positions[transmitter] - self.positions[receiver]
+        force_los = receiver in self.fixed_indices and transmitter in self.fixed_indices
+        gain = path_gain_linear(
+            float(np.linalg.norm(delta[:2])),
+            float(delta[2]),
+            self.cfg,
+            force_los=force_los,
+        )
+        return float(self.paper["communication_power_w"] * gain)
+
+    def _pair_rate_bps(self, receiver: int, transmitter: int, candidate: np.ndarray) -> float:
+        delta = self.positions[transmitter] - self.positions[receiver]
+        interference = 0.0
+        for interferer in range(self.n_agents):
+            if interferer in (receiver, transmitter):
+                continue
+            if candidate[receiver, interferer]:
+                interference += self._received_power_w(receiver, interferer)
+        force_los = receiver in self.fixed_indices and transmitter in self.fixed_indices
+        return communication_rate_bps(
+            float(np.linalg.norm(delta[:2])),
+            float(delta[2]),
+            self.cfg,
+            interference_power_w=interference,
+            force_los=force_los,
+        )
 
     def _refresh_links(self) -> None:
-        for j, idx in enumerate(self.multirotor_indices):
-            self.last_rates_bps[j] = self._nearest_fixed_rate(idx)
+        candidate = self._candidate_links()
+        self.last_pair_rates_bps.fill(0.0)
+        self.last_adjacency.fill(0)
+        rmin = float(self.paper["min_comm_rate_bps"])
+        for receiver in range(self.n_agents):
+            for transmitter in range(self.n_agents):
+                if not candidate[receiver, transmitter]:
+                    continue
+                rate = self._pair_rate_bps(receiver, transmitter, candidate)
+                self.last_pair_rates_bps[receiver, transmitter] = rate
+                if rate > rmin:
+                    self.last_adjacency[receiver, transmitter] = 1
+        for local_idx, rotor_idx in enumerate(self.multirotor_indices):
+            leader = int(self.rotor_leaders[local_idx])
+            self.last_rates_bps[local_idx] = (
+                self.last_pair_rates_bps[rotor_idx, leader] if leader >= 0 else 0.0
+            )
 
     def _observations(self) -> dict[str, np.ndarray]:
         obs: dict[str, np.ndarray] = {}
