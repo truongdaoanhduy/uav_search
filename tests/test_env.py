@@ -185,3 +185,59 @@ def test_obstacle_domain_is_hard_constraint():
     _, _, _, _, info = env.step(actions)
     assert info["obstacle_hits"] >= 1
     assert not circle_collision(env.positions[rotor, :2], env.obstacles[0])
+
+
+def test_energy_reward_matches_paper_eq22():
+    env = make_env(seed=20)
+    rotor = env.multirotor_indices[0]
+    env.battery_pct[rotor] = 50.0
+    assert env._energy_reward(rotor) == env.paper["energy_reward_scale"] * 50.0
+    env.battery_pct[rotor] = env.paper["safe_battery_pct"]
+    assert env._energy_reward(rotor) == 0.0
+
+
+def test_search_reward_matches_paper_eq24_in_environment_distance_units():
+    env = make_env(seed=21)
+    rotor = env.multirotor_indices[0]
+    env.target_found[:] = True
+    env.target_found[0] = False
+    env.positions[rotor, :2] = [1000.0, 1000.0]
+    env.targets[0] = [1200.0, 1000.0]
+    zeta = env.assumed["search_reward_coeff"]
+    delta = env.assumed["reward_distance_epsilon_m"]
+    assert np.isclose(env._task_reward(rotor, fixed=False), zeta / (200.0 + delta))
+    env.positions[rotor, :2] = env.targets[0]
+    assert env._task_reward(rotor, fixed=False) == zeta
+
+
+def test_safety_reward_matches_paper_eq23_in_environment_distance_units():
+    env = make_env(seed=22)
+    rotor = env.multirotor_indices[0]
+    other = env.multirotor_indices[1]
+    env.positions[:, :2] = [4000.0, 4000.0]
+    env.positions[rotor, :2] = [1000.0, 1000.0]
+    env.positions[other, :2] = [1050.0, 1000.0]
+    eta = env.assumed["safety_reward_coeff"]
+    delta = env.assumed["reward_distance_epsilon_m"]
+    reward, close = env._safety_reward(rotor)
+    assert close == 1
+    assert np.isclose(reward, -eta / (50.0 + delta))
+
+
+def test_communication_reward_matches_paper_eq21_and_formation_leader_distance():
+    env = make_env(seed=23)
+    rotor = env.multirotor_indices[0]
+    local = 0
+    leader = int(env.rotor_leaders[local])
+    env.positions[rotor] = [1000.0, 1000.0, env.assumed["multirotor_altitude_m"]]
+    env.positions[leader] = [1400.0, 1000.0, env.assumed["fixed_altitude_m"]]
+    env.last_rates_bps[local] = 0.5 * (
+        env.paper["min_comm_rate_bps"] + env.assumed["comm_rate_max_bps"]
+    )
+    d = float(np.linalg.norm(env.positions[rotor] - env.positions[leader]))
+    expected = env.assumed["comm_reward_max"] / (d + env.assumed["reward_distance_epsilon_m"])
+    assert np.isclose(env._communication_reward(rotor), expected)
+    env.last_rates_bps[local] = 0.5 * env.paper["min_comm_rate_bps"]
+    assert env._communication_reward(rotor) == -env.assumed["comm_reward_max"]
+    env.last_rates_bps[local] = 2.0 * env.assumed["comm_rate_max_bps"]
+    assert env._communication_reward(rotor) == env.assumed["comm_reward_max"]

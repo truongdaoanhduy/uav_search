@@ -54,7 +54,6 @@ assumed:
   safety_reward_coeff: 8.0
   search_reward_coeff: 20.0
   reward_distance_epsilon_m: 100.0
-  reward_distance_epsilon_km: 0.1  # legacy key removed after Eq. (21)-(27) reward rewrite
 
 runtime:
   seed: 0

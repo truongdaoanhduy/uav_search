@@ -213,6 +213,7 @@ class PaperUAVEnv:
         return np.stack([d[a] for a in self.agents], axis=0)
 
     def _task_reward(self, idx: int, fixed: bool) -> float:
+        """Paper Eqs. (24)-(25): target-search reward for rotor/fixed-wing UAVs."""
         if self.n_targets == 0:
             return 0.0
         dists = np.linalg.norm(self.targets - self.positions[idx, :2], axis=1)
@@ -220,19 +221,20 @@ class PaperUAVEnv:
         if not np.any(active):
             return 0.0
         d = float(np.min(dists[active]))
-        zeta = self.assumed["search_reward_coeff"]
-        eps = self.assumed["reward_distance_epsilon_km"]
+        zeta = float(self.assumed["search_reward_coeff"])
+        delta_d = float(self.assumed["reward_distance_epsilon_m"])
         if fixed:
-            return zeta / (d / 1000.0 + eps) if d <= self.assumed["fixed_detect_m"] else 0.0
+            return zeta / (d + delta_d) if d <= self.assumed["fixed_detect_m"] else 0.0
         if d < self.assumed["target_found_m"]:
             return zeta
         if d <= self.assumed["target_detect_m"]:
-            return zeta / (d / 1000.0 + eps)
+            return zeta / (d + delta_d)
         return 0.0
 
     def _safety_reward(self, idx: int) -> tuple[float, int]:
-        eta = self.assumed["safety_reward_coeff"]
-        eps = self.assumed["reward_distance_epsilon_km"]
+        """Paper Eq. (23): inverse-distance inter-UAV safety penalty."""
+        eta = float(self.assumed["safety_reward_coeff"])
+        delta_d = float(self.assumed["reward_distance_epsilon_m"])
         penalty = 0.0
         close = 0
         for j in range(self.n_agents):
@@ -241,8 +243,33 @@ class PaperUAVEnv:
             d = float(np.linalg.norm(self.positions[j] - self.positions[idx]))
             if d <= self.assumed["safety_distance_m"]:
                 close += 1
-                penalty -= eta / (d / 1000.0 + eps)
+                penalty -= eta / (d + delta_d)
         return penalty, close
+
+    def _energy_reward(self, idx: int) -> float:
+        """Paper Eq. (22): scaled remaining energy above the safe threshold."""
+        remaining = float(self.battery_pct[idx])
+        if remaining <= float(self.paper["safe_battery_pct"]):
+            return 0.0
+        return float(self.paper["energy_reward_scale"] * remaining)
+
+    def _communication_reward(self, idx: int) -> float:
+        """Paper Eq. (21): multi-rotor communication reward to its formation leader."""
+        if idx not in self.multirotor_indices:
+            return 0.0
+        local_idx = self.multirotor_indices.index(idx)
+        rate = float(self.last_rates_bps[local_idx])
+        rc = float(self.assumed["comm_reward_max"])
+        if rate < float(self.paper["min_comm_rate_bps"]):
+            return -rc
+        if rate >= float(self.assumed["comm_rate_max_bps"]):
+            return rc
+        leader = int(self.rotor_leaders[local_idx])
+        if leader < 0:
+            return -rc
+        distance_m = float(np.linalg.norm(self.positions[idx] - self.positions[leader]))
+        delta_d = float(self.assumed["reward_distance_epsilon_m"])
+        return rc / (distance_m + delta_d)
 
     def step(self, actions: dict[str, np.ndarray]):
         if set(actions) != set(self.agents):
@@ -314,18 +341,12 @@ class PaperUAVEnv:
         for i, name in enumerate(self.agents):
             safety, _ = self._safety_reward(i)
             if i in self.multirotor_indices:
-                ri = self.multirotor_indices.index(i)
-                rate = self.last_rates_bps[ri]
-                rc = self.assumed["comm_reward_max"]
-                if rate < self.paper["min_comm_rate_bps"]:
-                    r_comm = -rc
-                elif rate >= self.assumed["comm_rate_max_bps"]:
-                    r_comm = rc
-                else:
-                    nearest_fixed = min(np.linalg.norm(self.positions[i] - self.positions[f]) for f in self.fixed_indices)
-                    r_comm = rc / (nearest_fixed / 1000.0 + self.assumed["reward_distance_epsilon_km"])
-                r_power = self.paper["energy_reward_scale"] * self.battery_pct[i] if self.battery_pct[i] > self.paper["safe_battery_pct"] else 0.0
-                rewards[name] = float(r_comm + r_power + safety + self._task_reward(i, fixed=False))
+                rewards[name] = float(
+                    self._communication_reward(i)
+                    + self._energy_reward(i)
+                    + safety
+                    + self._task_reward(i, fixed=False)
+                )
             else:
                 rewards[name] = float(safety + self._task_reward(i, fixed=True))
 
