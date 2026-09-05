@@ -21,6 +21,7 @@ def main() -> None:
         default="auto",
     )
     p.add_argument("--local-only", action="store_true")
+    p.add_argument("--progress-every", type=int, default=10)
     a = p.parse_args()
 
     for algorithm in ("masac", "matd3", "maddpg"):
@@ -38,6 +39,7 @@ def main() -> None:
                 deterministic=a.deterministic,
                 amp_mode=a.amp,
                 wandb_mode="disabled" if a.local_only else a.wandb_mode,
+                progress_every=a.progress_every,
             )
             print(f"{algorithm}/{scenario}: {path}")
 

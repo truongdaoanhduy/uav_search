@@ -15,7 +15,7 @@ def test_train_cli_exposes_generic_gpu_and_wandb_modes():
         check=True,
     )
     help_text = proc.stdout
-    for flag in ["--device", "--amp", "--deterministic", "--wandb-api-key", "--wandb-mode", "--local-only"]:
+    for flag in ["--device", "--amp", "--deterministic", "--wandb-api-key", "--wandb-mode", "--local-only", "--progress-every"]:
         assert flag in help_text
     assert "--wandb-project" not in help_text
     assert "--wandb-entity" not in help_text
@@ -30,7 +30,7 @@ def test_run_all_cli_exposes_same_runtime_controls():
         check=True,
     )
     help_text = proc.stdout
-    for flag in ["--device", "--amp", "--deterministic", "--wandb-api-key", "--wandb-mode", "--local-only"]:
+    for flag in ["--device", "--amp", "--deterministic", "--wandb-api-key", "--wandb-mode", "--local-only", "--progress-every"]:
         assert flag in help_text
     assert "--wandb-project" not in help_text
     assert "--wandb-entity" not in help_text

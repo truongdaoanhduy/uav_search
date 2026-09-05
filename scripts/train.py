@@ -25,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--local-only", action="store_true", help="Never connect to W&B")
     p.add_argument("--run-name", default=None)
+    p.add_argument(
+        "--progress-every",
+        type=int,
+        default=10,
+        help="Print training progress every N episodes; first/final always print",
+    )
     return p
 
 
@@ -44,6 +50,7 @@ def main() -> None:
         deterministic=a.deterministic,
         amp_mode=a.amp,
         wandb_mode="disabled" if a.local_only else a.wandb_mode,
+        progress_every=a.progress_every,
     )
     print(f"Run directory: {run}")
 

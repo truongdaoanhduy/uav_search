@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -27,10 +28,11 @@ def tracking_mode(api_key: str | None = None, requested: str = "auto") -> str:
 class WandbLogger:
     """Best-effort W&B mirror on top of durable local logging.
 
-    The training loop writes local files first.  This class mirrors the same
-    information to W&B when credentials are present.  Any W&B SDK/network
-    exception disables further remote calls but is never allowed to terminate
-    MARL training.
+    The training loop writes local files first. This class mirrors the same
+    information to W&B when credentials are present. Ordinary W&B SDK/network
+    exceptions disable further remote calls but never terminate MARL training.
+    Process-control exceptions such as KeyboardInterrupt are intentionally not
+    swallowed.
     """
 
     def __init__(
@@ -66,18 +68,19 @@ class WandbLogger:
             self._wandb = wandb
             if self.mode == "online":
                 wandb.login(key=api_key, relogin=True)
-            kwargs: dict[str, Any] = {
-                "project": WANDB_PROJECT,
-                "name": run_name,
-                "config": config,
-                "mode": self.mode,
-                "dir": str(self.run_dir),
-            }
-            kwargs["entity"] = WANDB_ENTITY
-            self.run = wandb.init(**kwargs)
+            self.run = wandb.init(
+                project=WANDB_PROJECT,
+                entity=WANDB_ENTITY,
+                name=run_name,
+                config=config,
+                mode=self.mode,
+                dir=str(self.run_dir),
+            )
             self.active = self.run is not None
             self.online = self.active and self.mode == "online"
-        except BaseException as exc:
+            if self.active:
+                self._define_metrics()
+        except Exception as exc:
             self._fallback("init", exc)
 
     @property
@@ -86,19 +89,54 @@ class WandbLogger:
             return f"wandb-{self.mode}"
         return "local"
 
-    def _fallback(self, operation: str, exc: BaseException) -> None:
+    @property
+    def project_url(self) -> str:
+        return f"https://wandb.ai/{WANDB_ENTITY}/{WANDB_PROJECT}"
+
+    @property
+    def run_url(self) -> str | None:
+        if not self.online or self.run is None:
+            return None
+        return getattr(self.run, "url", None)
+
+    def _define_metrics(self) -> None:
+        """Use the real episode/update counters as W&B chart x-axes."""
+        if self.run is None or not hasattr(self.run, "define_metric"):
+            return
+        try:
+            self.run.define_metric("train/episode")
+            self.run.define_metric("train/*", step_metric="train/episode")
+            self.run.define_metric("performance/episode")
+            self.run.define_metric("performance/*", step_metric="performance/episode")
+            self.run.define_metric("update/update")
+            self.run.define_metric("update/*", step_metric="update/update")
+        except Exception as exc:
+            print(
+                f"[W&B WARNING] Could not define custom metric axes: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def _fallback(self, operation: str, exc: Exception) -> None:
         self.active = False
         self.online = False
         self.mode = "local"
         with self.fallback_path.open("a", encoding="utf-8") as handle:
             handle.write(f"{operation}: {type(exc).__name__}: {exc}\n")
+        print(
+            f"[W&B WARNING] {operation} failed: {type(exc).__name__}: {exc}. "
+            f"Falling back to local logging. Details: {self.fallback_path}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
         if not self.active or self.run is None:
             return
         try:
             self.run.log(metrics, step=step)
-        except BaseException as exc:
+        except Exception as exc:
             self._fallback("log", exc)
 
     def log_low_episode(self, payload: dict[str, Any]) -> None:
@@ -108,7 +146,7 @@ class WandbLogger:
             return
         try:
             self.run.log({"diagnostics/low_episode": json.dumps(row, ensure_ascii=False, default=str)})
-        except BaseException as exc:
+        except Exception as exc:
             self._fallback("low-episode", exc)
 
     def log_error(self, payload: dict[str, Any]) -> None:
@@ -118,7 +156,7 @@ class WandbLogger:
             return
         try:
             self.run.log({"diagnostics/error": json.dumps(row, ensure_ascii=False, default=str)})
-        except BaseException as exc:
+        except Exception as exc:
             self._fallback("error", exc)
 
     def log_image(self, path: str | Path, key: str) -> None:
@@ -129,7 +167,7 @@ class WandbLogger:
             return
         try:
             self.run.log({key: self._wandb.Image(str(file_path))})
-        except BaseException as exc:
+        except Exception as exc:
             self._fallback(f"image:{key}", exc)
 
     def log_model(self, path: str | Path, name: str, aliases: Iterable[str] = ()) -> None:
@@ -142,7 +180,7 @@ class WandbLogger:
             artifact = self._wandb.Artifact(name=name, type="model")
             artifact.add_file(str(file_path), name=file_path.name)
             self.run.log_artifact(artifact, aliases=list(aliases))
-        except BaseException as exc:
+        except Exception as exc:
             self._fallback(f"model:{file_path.name}", exc)
 
     def log_run_artifact(self, name: str) -> None:
@@ -159,7 +197,7 @@ class WandbLogger:
                 if path.exists():
                     artifact.add_dir(str(path))
             self.run.log_artifact(artifact, aliases=["latest"])
-        except BaseException as exc:
+        except Exception as exc:
             self._fallback("run-artifact", exc)
 
     def update_summary(self, values: dict[str, Any]) -> None:
@@ -167,7 +205,7 @@ class WandbLogger:
             return
         try:
             self.run.summary.update(values)
-        except BaseException as exc:
+        except Exception as exc:
             self._fallback("summary", exc)
 
     @staticmethod
@@ -192,7 +230,7 @@ class WandbLogger:
         try:
             columns, data = self._table_rows(rows)
             self.run.log({key: self._wandb.Table(columns=columns, data=data)})
-        except BaseException as exc:
+        except Exception as exc:
             self._fallback(f"table:{key}", exc)
 
     def finish(self) -> None:
@@ -204,5 +242,5 @@ class WandbLogger:
             return
         try:
             self.run.finish()
-        except BaseException as exc:
+        except Exception as exc:
             self._fallback("finish", exc)
