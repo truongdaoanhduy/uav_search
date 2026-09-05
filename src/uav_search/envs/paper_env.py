@@ -56,9 +56,14 @@ class PaperUAVEnv:
         if seed is not None:
             self._seed = int(seed)
             self.rng = np.random.default_rng(self._seed)
-        margin = 300.0
+        uav_margin = float(self.assumed["uav_init_margin_m"])
         self.positions = np.zeros((self.n_agents, 3), dtype=np.float64)
-        self.positions[:, :2] = self.rng.uniform(margin, self.area_size_m - margin, size=(self.n_agents, 2))
+        # The paper specifies uniform target/building placement, but does not publish
+        # initial UAV coordinates.  Keep the previous UAV-only margin as an explicit
+        # implementation assumption rather than applying it to paper-described objects.
+        self.positions[:, :2] = self.rng.uniform(
+            uav_margin, self.area_size_m - uav_margin, size=(self.n_agents, 2)
+        )
         self.positions[self.fixed_indices, 2] = self.assumed["fixed_altitude_m"]
         self.positions[self.multirotor_indices, 2] = self.assumed["multirotor_altitude_m"]
         self.velocities = np.zeros((self.n_agents, 2), dtype=np.float64)
@@ -73,12 +78,12 @@ class PaperUAVEnv:
                 self.velocities[self.fixed_indices, 1], self.velocities[self.fixed_indices, 0]
             )
         self.battery_pct = np.full(self.n_agents, 100.0, dtype=np.float64)
-        self.targets = self.rng.uniform(margin, self.area_size_m - margin, size=(self.n_targets, 2)).astype(np.float64)
+        self.targets = self.rng.uniform(0.0, self.area_size_m, size=(self.n_targets, 2)).astype(np.float64)
         self.target_found = np.zeros(self.n_targets, dtype=bool)
         radii = self.rng.uniform(
             self.assumed["obstacle_radius_min_m"], self.assumed["obstacle_radius_max_m"], size=self.n_obstacles
         )
-        centers = self.rng.uniform(margin, self.area_size_m - margin, size=(self.n_obstacles, 2))
+        centers = self.rng.uniform(0.0, self.area_size_m, size=(self.n_obstacles, 2))
         self.obstacles = np.column_stack([centers, radii]).astype(np.float64)
         self.step_count = 0
         self.cumulative_broken_time = np.zeros(self.n_rotor, dtype=np.float64)
@@ -237,9 +242,6 @@ class PaperUAVEnv:
             if d <= self.assumed["safety_distance_m"]:
                 close += 1
                 penalty -= eta / (d / 1000.0 + eps)
-        for circle in self.obstacles:
-            if circle_collision(self.positions[idx, :2], circle):
-                penalty -= self.assumed["obstacle_penalty"]
         return penalty, close
 
     def step(self, actions: dict[str, np.ndarray]):
@@ -255,6 +257,7 @@ class PaperUAVEnv:
         self.collision_count = 0
         self.obstacle_hits = 0
         self.boundary_hits = 0
+        previous_xy = self.positions[:, :2].copy()
 
         # Paper Eq. (8)-(12), reduced to planar motion with fixed type altitude.
         for i in self.fixed_indices:
@@ -292,6 +295,11 @@ class PaperUAVEnv:
         for i in range(self.n_agents):
             if any(circle_collision(self.positions[i, :2], c) for c in self.obstacles):
                 self.obstacle_hits += 1
+                # C3 in the paper excludes the obstacle domain. Reject the candidate
+                # displacement rather than adding an unpublished reward penalty.
+                self.positions[i, :2] = previous_xy[i]
+                if i in self.multirotor_indices:
+                    self.velocities[i] = 0.0
         for i in range(self.n_agents):
             for j in range(i + 1, self.n_agents):
                 if np.linalg.norm(self.positions[i] - self.positions[j]) <= self.assumed["safety_distance_m"]:
@@ -305,7 +313,6 @@ class PaperUAVEnv:
         rewards: dict[str, float] = {}
         for i, name in enumerate(self.agents):
             safety, _ = self._safety_reward(i)
-            safety -= self.assumed["boundary_penalty"] if np.any(before_clip[i] != self.positions[i, :2]) else 0.0
             if i in self.multirotor_indices:
                 ri = self.multirotor_indices.index(i)
                 rate = self.last_rates_bps[ri]

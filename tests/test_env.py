@@ -1,7 +1,7 @@
 import numpy as np
 
 from uav_search.config import load_config
-from uav_search.envs.models import communication_rate_bps, multirotor_power_w
+from uav_search.envs.models import circle_collision, communication_rate_bps, multirotor_power_w
 from uav_search.envs.paper_env import PaperUAVEnv
 
 
@@ -134,3 +134,54 @@ def test_rotor_adjacency_only_uses_its_formation_leader():
             if fi != leader:
                 assert env.last_adjacency[rotor_idx, fi] == 0
                 assert env.last_adjacency[fi, rotor_idx] == 0
+
+
+def test_targets_and_building_centers_are_sampled_without_paper_margin():
+    env = make_env(seed=11)
+    seen_edge = False
+    for seed in range(100):
+        env.reset(seed=seed)
+        if (
+            np.any(env.targets < 300.0)
+            or np.any(env.targets > 4700.0)
+            or np.any(env.obstacles[:, :2] < 300.0)
+            or np.any(env.obstacles[:, :2] > 4700.0)
+        ):
+            seen_edge = True
+            break
+    assert seen_edge
+
+
+def test_uav_initialization_keeps_documented_assumed_margin():
+    env = make_env(seed=8)
+    env.reset(seed=8)
+    margin = env.assumed["uav_init_margin_m"]
+    assert np.all(env.positions[:, :2] >= margin)
+    assert np.all(env.positions[:, :2] <= env.area_size_m - margin)
+
+
+def test_speed_constraints_follow_paper_table_i():
+    env = make_env(seed=2)
+    actions = {agent: np.array([1.0, 1.0], dtype=np.float32) for agent in env.agents}
+    for _ in range(20):
+        env.step(actions)
+    fixed_speeds = np.linalg.norm(env.velocities[env.fixed_indices], axis=1)
+    rotor_speeds = np.linalg.norm(env.velocities[env.multirotor_indices], axis=1)
+    assert np.all((fixed_speeds >= 10.0) & (fixed_speeds <= 40.0))
+    assert np.all(rotor_speeds <= 10.0 + 1e-9)
+
+
+def test_obstacle_domain_is_hard_constraint():
+    env = make_env(seed=3)
+    rotor = env.multirotor_indices[0]
+    env.positions[rotor, :2] = [980.0, 1000.0]
+    env.velocities[rotor] = 0.0
+    env.obstacles[:, :2] = [4500.0, 4500.0]
+    env.obstacles[:, 2] = 10.0
+    env.obstacles[0] = [1008.0, 1000.0, 20.0]
+    env._refresh_links()
+    actions = {a: np.zeros(2, dtype=np.float32) for a in env.agents}
+    actions[env.agents[rotor]] = np.array([1.0, 0.0], dtype=np.float32)
+    _, _, _, _, info = env.step(actions)
+    assert info["obstacle_hits"] >= 1
+    assert not circle_collision(env.positions[rotor, :2], env.obstacles[0])
