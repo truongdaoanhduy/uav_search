@@ -40,3 +40,23 @@ def test_assumed_values_are_isolated():
     assert "assumed" in cfg
     assert cfg["assumed"]["provenance"] == "ASSUMED"
     assert cfg["paper"]["provenance"] == "PAPER_EXPLICIT"
+
+
+def test_paper_scenarios_use_inferred_ten_target_budget():
+    for scenario in ("f1_m5", "f1_m9"):
+        cfg = load_config("masac", scenario)
+        assert cfg["scenario"]["targets"] == 10
+        assert cfg["scenario"]["targets_provenance"] == "PAPER_INFERRED"
+
+
+def test_channel_fallbacks_are_reference_backed_not_paper_explicit():
+    cfg = load_config("masac", "f1_m5")
+    ref = cfg["reference_backed"]
+    assert ref["provenance"] == "REFERENCE_BACKED"
+    assert ref["carrier_hz"] == 700_000_000.0
+    assert ref["bandwidth_hz"] == 1_000_000.0
+    assert ref["noise_power_w"] == 1e-13
+    assert ref["los_a"] == 11.95
+    assert ref["los_b"] == 0.14
+    assert ref["los_extra_loss_db"] == 1.0
+    assert ref["nlos_extra_loss_db"] == 20.0

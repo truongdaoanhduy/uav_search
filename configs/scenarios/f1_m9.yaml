@@ -2,5 +2,7 @@ scenario:
   name: f1_m9
   fixed_wing: 1
   multirotor: 9
-  targets: 5   # ASSUMED: same small-scenario target budget
-  obstacles: 8 # ASSUMED
+  targets: 10
+  targets_provenance: PAPER_INFERRED
+  obstacles: 8
+  obstacles_provenance: ASSUMED

@@ -17,9 +17,23 @@ paper:
   gamma: 0.99
   soft_update_epsilon: 0.99
 
+reference_backed:
+  provenance: REFERENCE_BACKED
+  # Ref. [39] in the original paper: Efficient Vehicular Data Sharing Using Aerial P2P Backbone.
+  carrier_hz: 700000000.0
+  bandwidth_hz: 1000000.0
+  noise_power_w: 1.0e-13
+  # Ref. [41] urban sigmoid parameters used by the original paper's LoS model family.
+  los_a: 11.95
+  los_b: 0.14
+  # Ref. [40] Urban mean excessive losses (LoS, NLoS) = (1.0, 20) dB.
+  los_extra_loss_db: 1.0
+  nlos_extra_loss_db: 20.0
+
 assumed:
   provenance: ASSUMED
   dt_s: 1.0
+  uav_init_margin_m: 300.0
   fixed_altitude_m: 200.0
   multirotor_altitude_m: 60.0
   n_targets: 5
@@ -35,20 +49,19 @@ assumed:
   hover_power_w: 120.0
   blade_drag_coeff: 0.08
   frame_drag_coeff: 0.00002
-  carrier_hz: 2400000000.0
+  carrier_hz: 700000000.0
   bandwidth_hz: 1000000.0
-  noise_power_w: 1.2e-13
-  los_a: 9.61
-  los_b: 0.16
+  noise_power_w: 1.0e-13
+  los_a: 11.95
+  los_b: 0.14
   los_extra_loss_db: 1.0
-  nlos_extra_loss_db: 25.0
+  nlos_extra_loss_db: 20.0
   comm_reward_max: 5.0
   comm_rate_max_bps: 10000000.0
   safety_reward_coeff: 8.0
   search_reward_coeff: 20.0
-  reward_distance_epsilon_km: 0.1
-  boundary_penalty: 5.0
-  obstacle_penalty: 15.0
+  reward_distance_epsilon_m: 100.0
+  reward_distance_epsilon_km: 0.1  # legacy key removed after Eq. (21)-(27) reward rewrite
 
 runtime:
   seed: 0

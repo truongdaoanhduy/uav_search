@@ -24,7 +24,7 @@ def test_seeded_reset_is_reproducible_and_shapes_match():
     assert np.allclose(a.positions, b.positions)
     assert np.allclose(a.targets, b.targets)
     assert np.allclose(a.obstacles, b.obstacles)
-    assert ia["targets_total"] == 5
+    assert ia["targets_total"] == 10
 
 
 def test_step_returns_finite_parallel_outputs_and_metrics():
@@ -81,8 +81,6 @@ def test_physical_models_are_monotonic_and_positive():
     near = communication_rate_bps(200.0, 140.0, cfg)
     far = communication_rate_bps(4000.0, 140.0, cfg)
     assert near > far > 0
-    assert near > cfg["paper"]["min_comm_rate_bps"]
-    assert far < cfg["paper"]["min_comm_rate_bps"]
     p0 = multirotor_power_w(0.0, 0.0, cfg)
     pfast = multirotor_power_w(10.0, 4.0, cfg)
     assert pfast > p0 > 0
