@@ -44,8 +44,13 @@ class PaperUAVEnv:
             )
         else:
             self.rotor_leaders = np.full(self.n_rotor, -1, dtype=np.int64)
-        # own 11 + every other UAV 7 + target 4 + obstacle 4
-        self.obs_dim = 11 + (self.n_agents - 1) * 7 + self.n_targets * 4 + self.n_obstacles * 4
+        # Shared padded baseline layout representing only the union of paper
+        # Eqs. (17)-(20): own {p(3), v(3), e, n, psi}, every other UAV
+        # {d_ij, p_j(3), e_j, n_j}, and sensed target distance d_i,k.
+        # Fields not defined for a UAV type are zero-masked. Obstacle geometry is
+        # intentionally not injected into the Actor observation because it is not
+        # part of Eqs. (17)-(20).
+        self.obs_dim = 9 + (self.n_agents - 1) * 6 + self.n_targets
         self.observation_space = Box(-np.inf, np.inf, shape=(self.obs_dim,), dtype=np.float32)
         self.action_space = Box(-1.0, 1.0, shape=(2,), dtype=np.float32)
         self.rng = np.random.default_rng(seed)
@@ -159,52 +164,88 @@ class PaperUAVEnv:
                 self.last_pair_rates_bps[rotor_idx, leader] if leader >= 0 else 0.0
             )
 
+    def _network_state(self, idx: int) -> float:
+        """Return the current binary network-connection state n_i from adjacency."""
+        if idx in self.multirotor_indices:
+            local_idx = self.multirotor_indices.index(idx)
+            leader = int(self.rotor_leaders[local_idx])
+            if leader < 0:
+                return 0.0
+            return float(self.last_adjacency[idx, leader] == 1)
+        return float(np.any(self.last_adjacency[idx] > 0))
+
+    def _target_observation_distance(self, idx: int, target_idx: int) -> float:
+        """Return normalized d_i,k only when the target is currently observable.
+
+        The system model states that target distance can be perceived only within
+        sensing range, and Sec. IV-D masks targets after they are discovered.
+        Numerical sensing ranges remain the existing explicit assumptions because
+        the original paper defines D_detect/D_detect-f but does not publish values.
+        """
+        if self.target_found[target_idx]:
+            return 0.0
+        d = float(np.linalg.norm(self.targets[target_idx] - self.positions[idx, :2]))
+        detect_range = (
+            float(self.assumed["fixed_detect_m"])
+            if idx in self.fixed_indices
+            else float(self.assumed["target_detect_m"])
+        )
+        if d > detect_range:
+            return 0.0
+        return d / self.area_size_m
+
     def _observations(self) -> dict[str, np.ndarray]:
+        """Build type-specific observations from paper Eqs. (17)-(20).
+
+        MASAC/MATD3/MADDPG in this repository require one common vector width, so
+        the two paper observation definitions are embedded in a shared padded
+        layout. Slots that are not part of a UAV type's paper state are zero.
+        """
         obs: dict[str, np.ndarray] = {}
         area = self.area_size_m
         vmax_scale = max(self.paper["fixed_speed_max_mps"], self.paper["multirotor_speed_max_mps"])
         for i, name in enumerate(self.agents):
-            speed = float(np.linalg.norm(self.velocities[i]))
-            is_fixed = 1.0 if i in self.fixed_indices else 0.0
-            if i in self.multirotor_indices:
-                ri = self.multirotor_indices.index(i)
-                linked = float(self.last_rates_bps[ri] >= self.paper["min_comm_rate_bps"])
-            else:
-                linked = 1.0
+            is_fixed = i in self.fixed_indices
+            is_rotor = i in self.multirotor_indices
+
+            # Union self layout: p(3), v(3), e, n, psi.
+            # Eq. (17) rotor: {p, v, e, n}; Eq. (19) fixed: {p, v, psi}.
             own = [
                 self.positions[i, 0] / area,
                 self.positions[i, 1] / area,
                 self.positions[i, 2] / area,
                 self.velocities[i, 0] / vmax_scale,
                 self.velocities[i, 1] / vmax_scale,
-                speed / vmax_scale,
-                self.battery_pct[i] / 100.0,
-                math.sin(self.headings[i]),
-                math.cos(self.headings[i]),
-                is_fixed,
-                linked,
+                0.0,  # z-velocity is unavailable in the retained 2.5D approximation.
+                self.battery_pct[i] / 100.0 if is_rotor else 0.0,
+                self._network_state(i) if is_rotor else 0.0,
+                self.headings[i] / math.pi if is_fixed else 0.0,
             ]
-            other = []
+
+            # Union neighbor layout: d_i,j, p_j(3), e_j, n_j.
+            # Eq. (18) rotor includes all of these; Eq. (20) fixed includes only
+            # p_j and n_j, so d_i,j and e_j are zero-masked for fixed observers.
+            other: list[float] = []
             for j in range(self.n_agents):
                 if j == i:
                     continue
-                d = self.positions[j] - self.positions[i]
-                dist = float(np.linalg.norm(d))
+                d_ij = float(np.linalg.norm(self.positions[j] - self.positions[i])) / area
+                e_j = self.battery_pct[j] / 100.0 if j in self.multirotor_indices else 0.0
                 other.extend([
-                    d[0] / area, d[1] / area, d[2] / area, dist / area,
-                    self.battery_pct[j] / 100.0,
-                    float(j in self.fixed_indices),
-                    float(dist < area),
+                    d_ij if is_rotor else 0.0,
+                    self.positions[j, 0] / area,
+                    self.positions[j, 1] / area,
+                    self.positions[j, 2] / area,
+                    e_j if is_rotor else 0.0,
+                    self._network_state(j),
                 ])
-            target = []
-            for k in range(self.n_targets):
-                dxy = self.targets[k] - self.positions[i, :2]
-                target.extend([dxy[0] / area, dxy[1] / area, np.linalg.norm(dxy) / area, float(self.target_found[k])])
-            obstacle = []
-            for circle in self.obstacles:
-                dxy = circle[:2] - self.positions[i, :2]
-                obstacle.extend([dxy[0] / area, dxy[1] / area, circle[2] / area, (np.linalg.norm(dxy) - circle[2]) / area])
-            vec = np.asarray(own + other + target + obstacle, dtype=np.float32)
+
+            # Eqs. (18),(20) use target distance d_i,k. The paper states that
+            # target information is available only inside sensing range; found
+            # targets are masked by the observation-optimization procedure.
+            target = [self._target_observation_distance(i, k) for k in range(self.n_targets)]
+
+            vec = np.asarray(own + other + target, dtype=np.float32)
             obs[name] = vec
         return obs
 

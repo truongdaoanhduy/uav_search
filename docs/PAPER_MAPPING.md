@@ -9,7 +9,7 @@ This document separates **what the article explicitly specifies** from values th
 | Simulation field | 5 km × 5 km | `paper.area_size_m: 5000` |
 | Fixed-wing mass | 10 kg | `paper.fixed_wing_mass_kg` |
 | Multi-rotor mass | 1 kg | `paper.multirotor_mass_kg` |
-| Communication power | 5 W | `paper.communication_power_w` |
+| Communication-energy power `P_com` | 5 W | `paper.communication_power_w` |
 | Minimum A2A rate | 1 Mbps | `paper.min_comm_rate_bps` |
 | Fixed-wing max speed | 40 m/s | `paper.fixed_speed_max_mps` |
 | Fixed-wing min speed | 10 m/s | `paper.fixed_speed_min_mps` |
@@ -34,11 +34,12 @@ Flow:
 1. 3-D UAV distance and elevation angle;
 2. sigmoid LoS probability;
 3. free-space loss + LoS/NLoS additional loss;
-4. received SNR using 5 W communication power;
-5. `R = B log2(1 + SNR)`;
-6. compare against the paper's 1 Mbps minimum rate.
+4. linear received signal power using the distinct Eq. (6) transmit power `P_tx,u`;
+5. SINR including interference and Gaussian noise;
+6. `R = B log2(1 + SINR)`;
+7. compare against the paper's 1 Mbps minimum rate.
 
-The article does not provide every radio constant needed to numerically evaluate the equations (carrier, bandwidth, environmental sigmoid constants, additional losses, noise). Those values live only in `configs/paper.yaml -> assumed` so they can be replaced without changing code.
+Table I publishes `P_com = 5 W` for communication-energy consumption, not a numeric value for Eq. (6) `P_tx,u`. The current `P_tx,u` fallback therefore remains under `assumed`. Other missing channel constants that were recovered from original-paper refs. [39]-[41] remain under `reference_backed`; none are labeled as original-paper explicit values.
 
 ## 3. UAV dynamics — paper Eq. (8)–(12)
 
@@ -69,14 +70,16 @@ and adds the constant communication power. Only multi-rotor energy is optimized/
 
 Implementation: `PaperUAVEnv._observations`.
 
-Every actor receives local structured information containing:
+The baseline now embeds the two paper type-specific observations into one padded width required by the shared MASAC/MATD3/MADDPG implementation:
 
-- normalized own position, velocity/speed, battery, heading/type/link state;
-- relative information for every other UAV;
-- relative target positions/distances/found state;
-- circular-obstacle geometry/clearance.
+- common self slots are the union `{p(3), v(3), e, n, psi}`;
+- multi-rotor self-state uses `{p, v, e, n}` from Eq. (17) and masks `psi`;
+- fixed-wing self-state uses `{p, v, psi}` from Eq. (19) and masks energy/network self slots;
+- each other-UAV block is the union `{d_i,j, p_j(3), e_j, n_j}`; fields absent from Eq. (20) are zero-masked for fixed-wing observers;
+- target input is only `d_i,k`, visible only within the type's sensing range and zero-masked once found/out of range;
+- obstacle geometry, agent-type flags, and always-visible target coordinates are no longer leaked into the Actor observation because they are not present in Eqs. (17)-(20).
 
-The centralized critic concatenates all agents' observations and actions, implementing CTDE. Observation dimension deliberately grows with swarm size for these baseline algorithms; no GAT compression is used.
+The centralized critic concatenates all agents' padded observations and actions, implementing CTDE. Observation dimension still grows with swarm size for these baseline algorithms; GAT importance ranking/aggregation remains outside baseline scope.
 
 ## 6. Rewards — paper Eq. (21)–(27)
 
@@ -95,7 +98,7 @@ The code preserves the paper's piecewise structure:
 - rate below `Rmin` → communication penalty;
 - valid link → distance-sensitive communication reward;
 - remaining battery above `esafe` → scaled battery reward;
-- too-small UAV separation / obstacle collision → safety penalty;
+- too-small inter-UAV separation → safety penalty; obstacle-domain entry is handled as the separate hard constraint C3, not as an unpublished reward term;
 - target within detect/found radius → distance-sensitive / confirmation reward.
 
 The article does not publish all reward magnitudes and detect/safety radii. They are all under `assumed`.

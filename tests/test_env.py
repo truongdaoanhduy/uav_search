@@ -253,3 +253,112 @@ def test_a2a_rate_uses_unpublished_tx_power_fallback_not_pcom():
     # P_com remains the explicit 5 W term in the rotor energy model.
     p0 = multirotor_power_w(0.0, 0.0, cfg)
     assert np.isclose(p0, cfg["assumed"]["hover_power_w"] + 5.0)
+
+
+def test_observation_layout_matches_paper_eq17_to_eq20_union():
+    env = make_env(seed=30)
+    # Shared padded baseline layout contains only the union of paper Eqs. (17)-(20):
+    # own {p(3), v(3), e, n, psi}, each other UAV {d_ij, p_j(3), e_j, n_j},
+    # and one sensed distance d_i,k per target. Obstacle geometry is not an Actor input.
+    expected = 9 + (env.n_agents - 1) * 6 + env.n_targets
+    assert env.obs_dim == expected
+    obs = env._observations()
+    assert all(v.shape == (expected,) for v in obs.values())
+
+
+def test_type_specific_self_state_masks_fields_not_in_paper_state():
+    env = make_env(seed=31)
+    fixed = env.fixed_indices[0]
+    rotor = env.multirotor_indices[0]
+    env.battery_pct[fixed] = 17.0
+    env.battery_pct[rotor] = 42.0
+    env.headings[fixed] = np.pi / 2
+    env.headings[rotor] = -np.pi / 3
+    env.last_adjacency.fill(0)
+    leader = int(env.rotor_leaders[0])
+    env.last_adjacency[rotor, leader] = 1
+    env.last_adjacency[leader, rotor] = 1
+
+    obs = env._observations()
+    fixed_self = obs[env.agents[fixed]][:9]
+    rotor_self = obs[env.agents[rotor]][:9]
+
+    # Eq. (19): fixed-wing self-state is {p, v, psi}; no energy/network fields.
+    assert fixed_self[6] == 0.0
+    assert fixed_self[7] == 0.0
+    assert np.isclose(fixed_self[8], 0.5)
+
+    # Eq. (17): multi-rotor self-state is {p, v, e, n}; no heading field.
+    assert np.isclose(rotor_self[6], 0.42)
+    assert rotor_self[7] == 1.0
+    assert rotor_self[8] == 0.0
+
+
+def test_neighbor_features_follow_eq18_and_eq20_without_extra_type_flags():
+    env = make_env(seed=32)
+    fixed = env.fixed_indices[0]
+    rotor = env.multirotor_indices[0]
+    env.positions[fixed] = [1000.0, 1200.0, env.assumed["fixed_altitude_m"]]
+    env.positions[rotor] = [1300.0, 1600.0, env.assumed["multirotor_altitude_m"]]
+    env.battery_pct[rotor] = 55.0
+    env.last_adjacency.fill(0)
+    env.last_adjacency[fixed, rotor] = 1
+    env.last_adjacency[rotor, fixed] = 1
+
+    obs = env._observations()
+    area = env.area_size_m
+
+    # fixed_0's first neighbor is rotor_0 in f1_m5. Eq. (20) has p_j and n_j,
+    # but not d_i,j or e_j, so their padded slots must be zero.
+    fixed_neighbor = obs[env.agents[fixed]][9:15]
+    assert fixed_neighbor[0] == 0.0
+    assert np.allclose(fixed_neighbor[1:4], env.positions[rotor] / area)
+    assert fixed_neighbor[4] == 0.0
+    assert fixed_neighbor[5] == 1.0
+
+    # rotor_0's first neighbor is fixed_0. Eq. (18) includes d_i,j, p_j, e_j, n_j.
+    rotor_neighbor = obs[env.agents[rotor]][9:15]
+    expected_d = np.linalg.norm(env.positions[fixed] - env.positions[rotor]) / area
+    assert np.isclose(rotor_neighbor[0], expected_d)
+    assert np.allclose(rotor_neighbor[1:4], env.positions[fixed] / area)
+    # Fixed-wing energy is not modeled by the paper, so e_j is masked for a fixed neighbor.
+    assert rotor_neighbor[4] == 0.0
+    assert rotor_neighbor[5] == 1.0
+
+
+def test_target_distance_is_visible_only_inside_type_sensing_range_and_unfound():
+    env = make_env(seed=33)
+    fixed = env.fixed_indices[0]
+    rotor = env.multirotor_indices[0]
+    env.positions[fixed, :2] = [1000.0, 1000.0]
+    env.positions[rotor, :2] = [1000.0, 1000.0]
+    env.targets[:] = [4900.0, 4900.0]
+    env.targets[0] = [1100.0, 1000.0]   # 100 m: visible to both
+    env.targets[1] = [2000.0, 1000.0]   # 1000 m: outside rotor 700, inside fixed 1500
+    env.target_found[:] = False
+
+    target_start = 9 + (env.n_agents - 1) * 6
+    obs = env._observations()
+    fixed_targets = obs[env.agents[fixed]][target_start:target_start + env.n_targets]
+    rotor_targets = obs[env.agents[rotor]][target_start:target_start + env.n_targets]
+
+    assert np.isclose(rotor_targets[0], 100.0 / env.area_size_m)
+    assert rotor_targets[1] == 0.0
+    assert np.isclose(fixed_targets[0], 100.0 / env.area_size_m)
+    assert np.isclose(fixed_targets[1], 1000.0 / env.area_size_m)
+
+    # Section IV-D explicitly masks targets after discovery.
+    env.target_found[0] = True
+    obs = env._observations()
+    assert obs[env.agents[rotor]][target_start] == 0.0
+    assert obs[env.agents[fixed]][target_start] == 0.0
+
+
+def test_actor_observation_does_not_leak_obstacle_geometry():
+    env = make_env(seed=34)
+    before = env._observations()
+    env.obstacles[:, :2] = [10.0, 10.0]
+    env.obstacles[:, 2] = 999.0
+    after = env._observations()
+    for agent in env.agents:
+        assert np.allclose(before[agent], after[agent])

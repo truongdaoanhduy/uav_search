@@ -129,7 +129,7 @@ The multi-rotor normalized force action is converted to an acceleration bounded 
 
 ### Observation vector
 
-The world state now reflects the corrected paper scenario and communication topology, but the baseline retains a fixed-size observation vector convenient for MASAC/MATD3/MADDPG. It does **not** reproduce GATAC's GAT-based importance pruning/aggregation; implementing GATAC is outside the baseline-scenario task.
+The baseline now follows the contents of Eqs. (17)-(20) using a common padded vector width required by MASAC/MATD3/MADDPG: multi-rotor and fixed-wing fields that do not belong to that UAV type are zero-masked, target input is distance-only, targets outside sensing range are hidden, and found targets are masked. Direct obstacle geometry and extra type flags are no longer injected into Actor observations. It still does **not** reproduce GATAC's learned importance ranking/GAT aggregation, which is outside the baseline-scenario task.
 
 ### OpenAI MPE
 
@@ -156,8 +156,8 @@ The final audit against the uploaded IEEE paper identifies several points that m
 - **Small-scenario target count:** Fig. 7 explicitly gives only the UAV counts `(1,5)` and `(1,9)`. It does not print the number of targets for those two scenes. The current value `10` is retained as `PAPER_INFERRED`; it is not an explicit paper parameter.
 - **Sensor description is internally inconsistent:** Section III states that multi-rotor UAVs carry RSSI target-signal detectors, while the simulation-design paragraph says fixed-wing UAVs carry signal-detection devices and multi-rotors carry cameras. The baseline therefore must not claim one sensor modality as uniquely specified by the paper.
 - **Large-scale Fig. 9 text contains an internal inconsistency:** the figure caption/plots use `(4,12)` and `(8,24)`, while the prose says "four and six fixed-wing" alongside 12 and 24 multi-rotors. The current project does not implement these expansion scenarios.
-- **Observation/state encoding is not exact:** Eqs. (17)-(20) define type-specific state/observation contents, and the paper later applies importance ranking/masking. The baseline keeps one fixed-size vector for MASAC/MATD3/MADDPG and therefore is not a literal reproduction of those observation vectors.
-- **Sensing-range visibility is not exact:** the paper states that target signal strength/distance is perceived only within sensing range. The current baseline retains a fixed observation layout and should not be claimed to reproduce the authors' exact sensing/masking implementation.
+- **Observation container is padded, not byte-identical to the authors' implementation:** the contents now follow Eqs. (17)-(20), with type-inapplicable slots zero-masked so MASAC/MATD3/MADDPG can share one tensor width. GATAC importance ranking/aggregation is still outside scope.
+- **Sensing values remain numerically assumed:** target visibility now obeys `D_detect` / `D_detect-f` and found-target masking, but those sensing radii are not numerically published by the original paper and therefore remain unchanged assumptions.
 - **OpenAI MPE backend is not literal:** the paper explicitly says the simulation is based on OpenAI MPE; this repository is a custom Gymnasium/MPE-style environment rather than the authors' MPE source.
 - **3D dynamics are approximated as 2.5D:** the paper defines 3D position/velocity dynamics, but does not publish the numerical constants/control details needed for exact integration. Fixed type-specific altitudes are retained as assumptions.
 
