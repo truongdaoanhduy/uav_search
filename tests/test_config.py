@@ -60,3 +60,12 @@ def test_channel_fallbacks_are_reference_backed_not_paper_explicit():
     assert ref["los_b"] == 0.14
     assert ref["los_extra_loss_db"] == 1.0
     assert ref["nlos_extra_loss_db"] == 20.0
+
+
+def test_pcom_is_paper_explicit_but_a2a_tx_power_is_not():
+    cfg = load_config("masac", "f1_m5")
+    # Table I publishes communication-energy power P_com = 5 W.
+    assert cfg["paper"]["communication_power_w"] == 5
+    # Eq. (6) uses a distinct transmit-power symbol P_tx,u, but the paper
+    # does not publish its numeric value. Preserve the current fallback.
+    assert cfg["assumed"]["tx_power_w"] == 5.0

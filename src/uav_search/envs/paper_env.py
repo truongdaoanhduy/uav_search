@@ -121,7 +121,7 @@ class PaperUAVEnv:
             self.cfg,
             force_los=force_los,
         )
-        return float(self.paper["communication_power_w"] * gain)
+        return float(self.assumed["tx_power_w"] * gain)
 
     def _pair_rate_bps(self, receiver: int, transmitter: int, candidate: np.ndarray) -> float:
         delta = self.positions[transmitter] - self.positions[receiver]

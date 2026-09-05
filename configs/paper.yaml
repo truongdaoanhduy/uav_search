@@ -3,7 +3,7 @@ paper:
   area_size_m: 5000
   fixed_wing_mass_kg: 10
   multirotor_mass_kg: 1
-  communication_power_w: 5
+  communication_power_w: 5  # Table I P_com: constant communication-energy power
   min_comm_rate_bps: 1000000
   fixed_speed_max_mps: 40
   fixed_speed_min_mps: 10
@@ -45,6 +45,7 @@ assumed:
   fixed_detect_m: 1500.0
   safety_distance_m: 100.0
   fixed_turn_rate_rad_s: 0.35
+  tx_power_w: 5.0  # ASSUMED: Eq. (6) P_tx,u is distinct from P_com and has no numeric value in the paper
   battery_capacity_j: 1000000.0
   hover_power_w: 120.0
   blade_drag_coeff: 0.08

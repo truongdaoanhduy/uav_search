@@ -34,7 +34,7 @@ The following are implemented from statements/equations/experimental parameters 
 | Task-area domain | UAV positions constrained to the task area |
 | Fixed-wing mass | 10 kg |
 | Multi-rotor mass | 1 kg |
-| Communication power | 5 W |
+| Communication-energy power `P_com` | 5 W |
 | Minimum communication rate | 1 Mbps |
 | Fixed-wing maximum speed | 40 m/s |
 | Fixed-wing minimum speed | 10 m/s |
@@ -67,7 +67,7 @@ This is intentionally **not** labeled `PAPER_EXPLICIT`.
 
 ## 3. Reference-backed channel constants
 
-The original paper gives the equations but does not publish every numeric channel constant. For those missing numbers, this implementation uses papers that the original paper itself cites.
+The original paper gives the equations but does not publish every numeric channel constant. In particular, Table I gives `P_com = 5 W` for communication-energy consumption, while Eq. (6) uses the distinct A2A transmit-power symbol `P_tx,u` without a numerical value. For those missing numbers, this implementation uses papers that the original paper itself cites.
 
 | Parameter | Value used | Provenance |
 |---|---:|---|
@@ -99,6 +99,7 @@ The original paper does not publish enough numerical information to reproduce th
 | Fixed-wing detection distance `D_detect-f` | 1500 m |
 | Safety distance `D_safe` | 100 m |
 | Fixed-wing maximum yaw-rate mapping | 0.35 rad/s |
+| A2A transmit power `P_tx,u` in Eq. (6) | 5 W (preserved fallback; paper gives no numeric value) |
 | Battery capacity in joules | 1,000,000 J |
 | `P0` in Eq. (13) | 120 W |
 | `mu` in Eq. (13) | 0.08 |

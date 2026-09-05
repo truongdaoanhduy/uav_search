@@ -51,7 +51,9 @@ def communication_sinr(
 ) -> float:
     """Paper Eq. (6): A2A SINR using received signal, interference, and Gaussian noise."""
     gain = path_gain_linear(horizontal_distance_m, vertical_distance_m, cfg, force_los=force_los)
-    signal_w = float(cfg["paper"]["communication_power_w"]) * gain
+    # Eq. (6) uses transmit power P_tx,u. Table I publishes P_com=5 W
+    # for communication energy consumption, not a numeric P_tx,u.
+    signal_w = float(cfg["assumed"]["tx_power_w"]) * gain
     noise_w = max(_channel_value(cfg, "noise_power_w"), 1e-20)
     denominator = max(float(interference_power_w), 0.0) + noise_w
     return float(signal_w / denominator)

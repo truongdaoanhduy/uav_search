@@ -241,3 +241,15 @@ def test_communication_reward_matches_paper_eq21_and_formation_leader_distance()
     assert env._communication_reward(rotor) == -env.assumed["comm_reward_max"]
     env.last_rates_bps[local] = 2.0 * env.assumed["comm_rate_max_bps"]
     assert env._communication_reward(rotor) == env.assumed["comm_reward_max"]
+
+
+def test_a2a_rate_uses_unpublished_tx_power_fallback_not_pcom():
+    cfg = load_config("masac", "f1_m5")
+    rate_default = communication_rate_bps(500.0, 140.0, cfg)
+    cfg["assumed"]["tx_power_w"] = 0.5
+    rate_lower_tx = communication_rate_bps(500.0, 140.0, cfg)
+    assert rate_lower_tx < rate_default
+
+    # P_com remains the explicit 5 W term in the rotor energy model.
+    p0 = multirotor_power_w(0.0, 0.0, cfg)
+    assert np.isclose(p0, cfg["assumed"]["hover_power_w"] + 5.0)
