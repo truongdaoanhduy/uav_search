@@ -15,13 +15,40 @@ class Batch:
     dones: torch.Tensor
 
 
+def replay_bytes_per_transition(n_agents: int, obs_dim: int, action_dim: int) -> int:
+    """Bytes stored for one float32 joint transition.
+
+    A transition contains obs + next_obs, joint actions, per-agent rewards,
+    and per-agent done flags. This helper makes the large-swarm memory cost
+    explicit without changing the data stored by the baseline algorithms.
+    """
+    n = int(n_agents)
+    scalars = 2 * n * int(obs_dim) + n * int(action_dim) + 2 * n
+    return 4 * scalars
+
+
+def capacity_with_memory_budget(
+    requested_capacity: int,
+    n_agents: int,
+    obs_dim: int,
+    action_dim: int,
+    budget_mb: float | None,
+) -> int:
+    requested = max(1, int(requested_capacity))
+    if budget_mb is None or float(budget_mb) <= 0:
+        return requested
+    bytes_per = replay_bytes_per_transition(n_agents, obs_dim, action_dim)
+    budget_bytes = max(1, int(float(budget_mb) * 1024 * 1024))
+    return max(1, min(requested, budget_bytes // max(bytes_per, 1)))
+
+
 class ReplayBuffer:
     """Fixed-size CPU replay storage with direct Torch sampling.
 
-    Storage stays on CPU so large replay buffers do not consume GPU VRAM.  CUDA
-    training requests non-blocking copies; CPU training simply returns CPU
-    tensors.  The sampling RNG remains NumPy-based to preserve the existing
-    seeded replay behavior.
+    Storage stays on CPU so large replay buffers do not consume GPU VRAM.
+    The caller may cap capacity from an explicit memory budget because the
+    root paper does not publish replay capacity and large centralized-baseline
+    transitions grow rapidly with swarm size.
     """
 
     def __init__(
@@ -39,6 +66,10 @@ class ReplayBuffer:
         self.action_dim = int(action_dim)
         self.rng = np.random.default_rng(seed)
         self.pin_memory = bool(pin_memory)
+        self.bytes_per_transition = replay_bytes_per_transition(
+            self.n_agents, self.obs_dim, self.action_dim
+        )
+        self.estimated_bytes = self.capacity * self.bytes_per_transition
 
         def alloc(shape: tuple[int, ...]) -> torch.Tensor:
             return torch.empty(shape, dtype=torch.float32, device="cpu", pin_memory=self.pin_memory)

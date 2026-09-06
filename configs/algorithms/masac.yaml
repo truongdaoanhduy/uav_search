@@ -4,6 +4,9 @@ algorithm:
   tau: 0.01
   actor_lr: 0.001
   critic_lr: 0.001
-  alpha: 0.2
+  # Root-paper ref. [44] Table I: independent alpha starts at 0.01 and is auto-tuned.
+  alpha_init: 0.01
+  alpha_lr: 0.001  # Root paper/ref. [44] do not publish a separate alpha LR; use actor LR.
+  target_entropy: auto  # Ref. [44]: -dim(A_i)
   log_std_min: -5.0
   log_std_max: 2.0

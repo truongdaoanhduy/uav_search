@@ -20,19 +20,21 @@ paper:
 
 reference_backed:
   provenance: REFERENCE_BACKED
-  # Ref. [39] in the original paper: Efficient Vehicular Data Sharing Using Aerial P2P Backbone.
+  # Ref. [39] in the root paper: Efficient Vehicular Data Sharing Using Aerial P2P Backbone.
   carrier_hz: 700000000.0
   bandwidth_hz: 1000000.0
   noise_power_w: 1.0e-13
-  # Ref. [41] urban sigmoid parameters used by the original paper's LoS model family.
+  tx_power_w: 10.0  # Ref. [39] Table III: UAV transmission power = 40 dBm = 10 W.
+  # Root-paper refs. [40]-[41] use this urban LoS model family; ref. [41] explicitly uses a=11.95, b=0.14.
   los_a: 11.95
   los_b: 0.14
-  # Ref. [40] Urban mean excessive losses (LoS, NLoS) = (1.0, 20) dB.
+  # Ref. [40] urban mean excessive losses (LoS, NLoS) = (1.0, 20) dB.
   los_extra_loss_db: 1.0
   nlos_extra_loss_db: 20.0
 
 assumed:
   provenance: ASSUMED
+  # The values below are required to execute the simulator but are not numerically published by the root paper.
   dt_s: 1.0
   uav_init_margin_m: 300.0
   fixed_altitude_m: 200.0
@@ -46,7 +48,6 @@ assumed:
   fixed_detect_m: 1500.0
   safety_distance_m: 100.0
   fixed_turn_rate_rad_s: 0.35
-  tx_power_w: 5.0  # ASSUMED: Eq. (6) P_tx,u is distinct from P_com and has no numeric value in the paper
   battery_capacity_j: 1000000.0
   hover_power_w: 120.0
   blade_drag_coeff: 0.08
@@ -62,6 +63,8 @@ runtime:
   episodes: 50000
   warmup_steps: 256
   replay_size: 100000
+  # Implementation resource guard only. Replay capacity is not published by the root paper.
+  replay_memory_budget_mb: 512
   batch_size: 128
   hidden_sizes: [128, 128]
   update_after: 256

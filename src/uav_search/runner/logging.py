@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .diagnostics import diagnose_episode
+
 
 class RunLogger:
     """Durable local-first experiment logger.
@@ -101,6 +103,12 @@ class RunLogger:
         historical = list(self.returns)
         self._append_csv(self.episode_csv, metrics)
         signals = self._signals(metrics)
+        # Random warm-up intentionally produces poor search/link behavior. Keep the
+        # live scalars, but do not flood the anomaly table unless safety/energy or
+        # optimizer health indicates a real failure.
+        if str(metrics.get("phase", "")) == "warmup":
+            hard_warmup_signals = {"collision_high", "energy_high", "critic_unstable"}
+            signals = [signal for signal in signals if signal in hard_warmup_signals]
         low_by_return = False
         if len(historical) >= 3:
             sorted_hist = sorted(historical)
@@ -113,6 +121,8 @@ class RunLogger:
         if signals:
             unique_signals = sorted(set(signals))
             payload = dict(metrics)
+            for key, value in diagnose_episode(metrics).items():
+                payload.setdefault(key, value)
             payload["signals"] = unique_signals
             payload["severity"] = self._severity(unique_signals, metrics)
             payload["logged_at"] = datetime.now(timezone.utc).isoformat()

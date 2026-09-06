@@ -39,6 +39,9 @@ def test_two_episode_training_pipeline_creates_artifacts(algorithm, tmp_path):
         assert col in perf.columns
         assert (ep[col] >= 0).all()
         assert (perf[col] >= 0).all()
+    for col in ["q_mean", "target_q_mean", "td_error_abs_mean"]:
+        assert col in ep.columns
+        assert ep[col].map(lambda value: pd.notna(value)).all()
     for name in ["reward.png", "search_rate.png", "energy.png", "broken_link.png", "trajectory.png"]:
         p = run_dir / "plots" / name
         assert p.exists() and p.stat().st_size > 0

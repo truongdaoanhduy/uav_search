@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import argparse
+
+from uav_search.config import PAPER_ALGORITHMS, PAPER_SCENARIOS
 from uav_search.runner.train import train_experiment
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Train one heterogeneous-UAV paper baseline.")
-    p.add_argument("--algorithm", choices=["masac", "matd3", "maddpg"], required=True)
-    p.add_argument("--scenario", choices=["f1_m5", "f1_m9"], required=True)
+    p.add_argument("--algorithm", choices=PAPER_ALGORITHMS, required=True)
+    p.add_argument("--scenario", choices=PAPER_SCENARIOS, required=True)
     p.add_argument("--episodes", type=int, default=None, help="Override training episodes; paper reference is 50,000")
     p.add_argument("--steps", type=int, default=None, help="Development-only override; paper value is 50 steps/episode")
     p.add_argument("--seed", type=int, default=0)

@@ -110,6 +110,10 @@ class WandbLogger:
             self.run.define_metric("performance/*", step_metric="performance/episode")
             self.run.define_metric("update/update")
             self.run.define_metric("update/*", step_metric="update/update")
+            self.run.define_metric("diagnostics/episode")
+            self.run.define_metric("diagnostics/*", step_metric="diagnostics/episode")
+            self.run.define_metric("paper/episode")
+            self.run.define_metric("paper/*", step_metric="paper/episode")
         except Exception as exc:
             print(
                 f"[W&B WARNING] Could not define custom metric axes: "
@@ -145,7 +149,14 @@ class WandbLogger:
         if not self.active or self.run is None:
             return
         try:
-            self.run.log({"diagnostics/low_episode": json.dumps(row, ensure_ascii=False, default=str)})
+            payload = {
+                "diagnostics/low_episode": json.dumps(row, ensure_ascii=False, default=str),
+                "diagnostics/low_episode_number": int(row.get("episode", 0)),
+                "diagnostics/low_failure_scope": str(row.get("failure_scope", "unknown")),
+                "diagnostics/low_worst_agent": str(row.get("worst_agent", "unknown")),
+                "diagnostics/low_primary_cause": str(row.get("primary_cause", "unknown")),
+            }
+            self.run.log(payload)
         except Exception as exc:
             self._fallback("low-episode", exc)
 
@@ -192,7 +203,7 @@ class WandbLogger:
                 path = self.run_dir / filename
                 if path.exists():
                     artifact.add_file(str(path), name=filename)
-            for dirname in ("checkpoints", "metrics", "logs", "plots", "rollouts"):
+            for dirname in ("checkpoints", "metrics", "logs", "plots", "rollouts", "paper_figures", "evaluations"):
                 path = self.run_dir / dirname
                 if path.exists():
                     artifact.add_dir(str(path))

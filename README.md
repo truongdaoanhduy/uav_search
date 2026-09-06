@@ -53,7 +53,13 @@ Có W&B key: metrics, low-metric episodes, error diagnostics, plots và checkpoi
 ## Chạy cả 3 thuật toán × 2 scenarios
 
 ```bash
-python scripts/run_all.py --episodes 50000 --device auto --amp auto --wandb-api-key YOUR_WANDB_TOKEN
+python scripts/run_all.py --episodes 50000 --eval-episodes 5000 --device auto --amp auto --wandb-api-key YOUR_WANDB_TOKEN
 ```
 
 W&B được cố định tại `uav_search_paper/uav_search_target`. Nếu không dùng W&B, chỉ cần bỏ `--wandb-api-key` khỏi lệnh.
+
+## Paper plots và W&B diagnostics
+
+`run_all.py` mặc định chỉ chạy hai scenario hiện tại `f1_m5` và `f1_m9`. Sau evaluation, pipeline tạo Fig. 7/10/11/12-style comparison; từng run tạo thêm Fig. 6-style scenario plot. W&B đồng thời log paper metrics, reward components, fixed-vs-rotor returns, per-UAV communication/energy/safety/search diagnostics, và RL training-health metrics để truy ra episode/UAV/nguyên nhân metric thấp.
+
+Chi tiết key và cách đọc dashboard: [`docs/WANDB_DIAGNOSTICS.md`](docs/WANDB_DIAGNOSTICS.md).

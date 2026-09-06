@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from uav_search.runtime import autocast_context, configure_runtime, make_grad_scaler
-from .common import ReplayBuffer
+from .common import ReplayBuffer, capacity_with_memory_budget
 
 
 class BaseOffPolicy:
@@ -37,8 +37,23 @@ class BaseOffPolicy:
         self.hidden_sizes = list(runtime_cfg["hidden_sizes"])
         self.rng = np.random.default_rng(seed)
         torch.manual_seed(seed)
+
+        self.requested_replay_capacity = int(runtime_cfg["replay_size"])
+        budget_mb = runtime_cfg.get("replay_memory_budget_mb")
+        replay_capacity = capacity_with_memory_budget(
+            self.requested_replay_capacity,
+            self.n_agents,
+            self.obs_dim,
+            self.action_dim,
+            None if budget_mb is None else float(budget_mb),
+        )
+        if replay_capacity < self.batch_size:
+            raise ValueError(
+                f"Replay memory budget yields capacity={replay_capacity}, below batch_size={self.batch_size}. "
+                "Increase runtime.replay_memory_budget_mb or reduce batch_size."
+            )
         self.replay = ReplayBuffer(
-            int(runtime_cfg["replay_size"]),
+            replay_capacity,
             self.n_agents,
             self.obs_dim,
             self.action_dim,

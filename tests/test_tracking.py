@@ -106,9 +106,13 @@ def test_online_logger_streams_diagnostics_and_artifacts(monkeypatch, tmp_path):
     assert ("performance/*", {"step_metric": "performance/episode"}) in run.defined_metrics
     assert ("update/update", {}) in run.defined_metrics
     assert ("update/*", {"step_metric": "update/update"}) in run.defined_metrics
+    assert ("diagnostics/episode", {}) in run.defined_metrics
+    assert ("diagnostics/*", {"step_metric": "diagnostics/episode"}) in run.defined_metrics
+    assert ("paper/episode", {}) in run.defined_metrics
+    assert ("paper/*", {"step_metric": "paper/episode"}) in run.defined_metrics
 
     logger.log({"train/return_mean": 3.0}, step=2)
-    logger.log_low_episode({"episode": 2, "search_rate": 0.0, "signals": ["search_low"], "severity": "critical"})
+    logger.log_low_episode({"episode": 2, "search_rate": 0.0, "signals": ["search_low"], "severity": "critical", "failure_scope": "single_agent", "worst_agent": "rotor_1", "primary_cause": "communication"})
     logger.log_error({"episode": 2, "exception_type": "RuntimeError", "message": "boom", "traceback": "trace"})
 
     plot = tmp_path / "plot.png"
@@ -123,6 +127,10 @@ def test_online_logger_streams_diagnostics_and_artifacts(monkeypatch, tmp_path):
     logged_keys = {k for payload, _ in run.logs for k in payload}
     assert "train/return_mean" in logged_keys
     assert "diagnostics/low_episode" in logged_keys
+    assert "diagnostics/low_episode_number" in logged_keys
+    assert "diagnostics/low_failure_scope" in logged_keys
+    assert "diagnostics/low_worst_agent" in logged_keys
+    assert "diagnostics/low_primary_cause" in logged_keys
     assert "diagnostics/error" in logged_keys
     assert "diagnostics/low_metric_episodes" in logged_keys
     assert "diagnostics/errors" in logged_keys

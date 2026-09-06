@@ -1,0 +1,8 @@
+scenario:
+  name: f8_m24
+  fixed_wing: 8
+  multirotor: 24
+  targets: 20
+  targets_provenance: PAPER_EXPLICIT
+  obstacles: 16
+  obstacles_provenance: ASSUMED

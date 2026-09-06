@@ -37,6 +37,9 @@ def test_algorithm_action_update_and_checkpoint_roundtrip(name, tmp_path):
     if name == "matd3":
         metrics = algo.update()  # second update triggers delayed actor
     assert metrics
+    for required in ["q_mean", "target_q_mean", "td_error_abs_mean"]:
+        assert required in metrics, (name, required, metrics)
+        assert np.isfinite(metrics[required]), (name, required, metrics[required])
     for key, value in metrics.items():
         if key.endswith("loss"):
             assert np.isfinite(value), (key, value)
@@ -52,7 +55,7 @@ def test_algorithm_action_update_and_checkpoint_roundtrip(name, tmp_path):
 
 
 @pytest.mark.parametrize("name", ["maddpg", "matd3", "masac"])
-def test_action_inference_batches_each_agent_type_once(name):
+def test_action_inference_calls_each_per_agent_actor_once(name):
     cfg = deepcopy(load_config(name, "f1_m5"))
     cfg["runtime"]["hidden_sizes"] = [16, 16]
     env = PaperUAVEnv(cfg, seed=7)
@@ -60,11 +63,11 @@ def test_action_inference_batches_each_agent_type_once(name):
     obs = np.stack([obs_dict[a] for a in env.agents])
     algo = make_algorithm(name, env, cfg, device="cpu", seed=7)
 
-    calls = {"fixed": 0, "rotor": 0}
+    calls = [0 for _ in range(env.n_agents)]
     hooks = []
-    for key in calls:
-        hooks.append(algo.actors[key].register_forward_hook(
-            lambda module, args, output, key=key: calls.__setitem__(key, calls[key] + 1)
+    for i, actor in enumerate(algo.actors):
+        hooks.append(actor.register_forward_hook(
+            lambda module, args, output, i=i: calls.__setitem__(i, calls[i] + 1)
         ))
     try:
         algo.act(obs, explore=False)
@@ -72,7 +75,7 @@ def test_action_inference_batches_each_agent_type_once(name):
         for hook in hooks:
             hook.remove()
 
-    assert calls == {"fixed": 1, "rotor": 1}
+    assert calls == [1 for _ in range(env.n_agents)]
 
 
 @pytest.mark.parametrize("name", ["maddpg", "matd3", "masac"])

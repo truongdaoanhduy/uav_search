@@ -34,3 +34,9 @@ def test_run_all_cli_exposes_same_runtime_controls():
         assert flag in help_text
     assert "--wandb-project" not in help_text
     assert "--wandb-entity" not in help_text
+
+
+def test_run_all_help_defaults_to_fig7_scope_and_exposes_eval_episodes():
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "run_all.py"), "--help"], cwd=ROOT, text=True, capture_output=True, check=True)
+    assert "--eval-episodes" in proc.stdout
+    assert "f1_m5/f1_m9" in proc.stdout

@@ -17,9 +17,10 @@ from uav_search.config import load_config
 from uav_search.envs.paper_env import PaperUAVEnv
 from uav_search.runtime import configure_runtime, resolve_device
 
+from .diagnostics import diagnose_episode
 from .logging import RunLogger
 from .progress import format_episode_progress, format_startup_summary, should_report_episode
-from .visualize import plot_training_curves, plot_trajectory
+from .visualize import plot_simulation_scenario, plot_training_curves, plot_trajectory
 from .wandb_logger import WandbLogger
 
 
@@ -63,6 +64,7 @@ def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUA
         "search_rate": float(info.get("search_rate", 0.0)),
         "targets_found": int(info.get("targets_found", 0)),
         "energy_j": float(env.total_energy_used_j),
+        "energy_consumption_pct": float(info.get("energy_consumption_pct", 0.0)),
         "mean_broken_link_s": float(info.get("mean_broken_link_s", 0.0)),
         "max_broken_link_s": float(info.get("max_broken_link_s", 0.0)),
         "collisions": collision_sum,
@@ -174,6 +176,12 @@ def train_experiment(
             collision_sum = obstacle_sum = boundary_sum = 0
             comm_rates: list[float] = []
             saturations: list[float] = []
+            reward_component_sums = {
+                name: {"communication": 0.0, "energy": 0.0, "safety": 0.0, "task": 0.0}
+                for name in env.agents
+            }
+            agent_saturation_sums = {name: 0.0 for name in env.agents}
+            agent_comm_rate_sums = {name: 0.0 for name in env.agents if name.startswith("rotor_")}
             last_info: dict[str, Any] = {}
 
             for step in range(1, env.max_steps + 1):
@@ -198,6 +206,13 @@ def train_experiment(
                 boundary_sum += int(last_info["boundary_hits"])
                 comm_rates.append(float(last_info["mean_comm_rate_mbps"]))
                 saturations.append(float(last_info["action_saturation"]))
+                for agent_name, components in last_info.get("agent_reward_components", {}).items():
+                    for component in ("communication", "energy", "safety", "task"):
+                        reward_component_sums[agent_name][component] += float(components.get(component, 0.0))
+                for agent_name, value in last_info.get("agent_action_saturation", {}).items():
+                    agent_saturation_sums[agent_name] += float(value)
+                for agent_name, value in last_info.get("agent_comm_rate_mbps", {}).items():
+                    agent_comm_rate_sums[agent_name] += float(value)
 
                 if (
                     global_step >= int(cfg["runtime"]["update_after"])
@@ -231,6 +246,7 @@ def train_experiment(
                 "search_rate": float(last_info.get("search_rate", 0.0)),
                 "targets_found": int(last_info.get("targets_found", 0)),
                 "energy_j": float(env.total_energy_used_j),
+                "energy_consumption_pct": float(last_info.get("energy_consumption_pct", 0.0)),
                 "mean_broken_link_s": float(last_info.get("mean_broken_link_s", 0.0)),
                 "max_broken_link_s": float(last_info.get("max_broken_link_s", 0.0)),
                 "collisions": collision_sum,
@@ -240,10 +256,47 @@ def train_experiment(
                 "action_saturation": float(np.mean(saturations)) if saturations else 0.0,
                 "mean_comm_rate_mbps": float(np.mean(comm_rates)) if comm_rates else 0.0,
                 "critic_loss": float(latest_update.get("critic_loss", 0.0)),
+                "critic1_loss": float(latest_update.get("critic1_loss", 0.0)),
+                "critic2_loss": float(latest_update.get("critic2_loss", 0.0)),
                 "actor_loss": float(latest_update.get("actor_loss", 0.0)),
+                "q_mean": float(latest_update.get("q_mean", 0.0)),
+                "target_q_mean": float(latest_update.get("target_q_mean", 0.0)),
+                "td_error_abs_mean": float(latest_update.get("td_error_abs_mean", 0.0)),
+                "q_gap_abs_mean": float(latest_update.get("q_gap_abs_mean", 0.0)),
                 "entropy": float(latest_update.get("entropy", 0.0)),
                 "alpha": float(latest_update.get("alpha", 0.0)),
+                "alpha_loss": float(latest_update.get("alpha_loss", 0.0)),
             }
+            fixed_returns = ep_returns[env.fixed_indices] if env.fixed_indices else np.asarray([], dtype=float)
+            rotor_returns = ep_returns[env.multirotor_indices] if env.multirotor_indices else np.asarray([], dtype=float)
+            ep_metrics["fixed_return_mean"] = float(fixed_returns.mean()) if len(fixed_returns) else 0.0
+            ep_metrics["rotor_return_mean"] = float(rotor_returns.mean()) if len(rotor_returns) else 0.0
+            ep_metrics["rotor_return_min"] = float(rotor_returns.min()) if len(rotor_returns) else 0.0
+            for component in ("task", "communication", "energy", "safety"):
+                ep_metrics[f"reward_{component}_sum"] = float(
+                    sum(parts[component] for parts in reward_component_sums.values())
+                )
+            for i, agent_name in enumerate(env.agents):
+                prefix = f"agent/{agent_name}/"
+                ep_metrics[prefix + "return"] = float(ep_returns[i])
+                for component in ("task", "communication", "energy", "safety"):
+                    ep_metrics[prefix + f"{component}_reward"] = float(reward_component_sums[agent_name][component])
+                ep_metrics[prefix + "battery_pct"] = float(last_info.get("agent_battery_pct", {}).get(agent_name, 100.0))
+                ep_metrics[prefix + "action_saturation"] = float(agent_saturation_sums[agent_name] / max(1, episode_steps))
+                if agent_name.startswith("rotor_"):
+                    ep_metrics[prefix + "comm_rate_mbps"] = float(agent_comm_rate_sums.get(agent_name, 0.0) / max(1, episode_steps))
+                    ep_metrics[prefix + "broken_link_s"] = float(last_info.get("agent_broken_link_s", {}).get(agent_name, 0.0))
+                    ep_metrics[prefix + "energy_consumption_pct"] = float(
+                        last_info.get("agent_energy_consumption_pct", {}).get(agent_name, 0.0)
+                    )
+            warmup_steps = int(cfg["runtime"]["warmup_steps"])
+            if global_step <= warmup_steps:
+                ep_metrics["phase"] = "warmup"
+            elif episode < 30000:
+                ep_metrics["phase"] = "learning"
+            else:
+                ep_metrics["phase"] = "post_convergence_reference"
+            ep_metrics.update(diagnose_episode(ep_metrics))
             if profile.device.type == "cuda":
                 ep_metrics["gpu_allocated_mb"] = float(
                     torch.cuda.memory_allocated(profile.device) / (1024**2)
@@ -276,6 +329,29 @@ def train_experiment(
                 wb.log_low_episode(low_payload)
             wb.log({f"train/{k}": v for k, v in ep_metrics.items()})
             wb.log({f"performance/{k}": v for k, v in performance_metrics.items()})
+            wb.log({
+                "paper/episode": episode,
+                "paper/reward_total": ep_metrics["return_sum"],
+                "paper/targets_found": ep_metrics["targets_found"],
+                "paper/search_rate": ep_metrics["search_rate"],
+                "paper/energy_consumption_pct": ep_metrics["energy_consumption_pct"],
+                "paper/broken_link_duration_s": ep_metrics["mean_broken_link_s"],
+            })
+            diagnostic_scalars: dict[str, Any] = {
+                "diagnostics/episode": episode,
+                "diagnostics/fixed_return_mean": ep_metrics["fixed_return_mean"],
+                "diagnostics/rotor_return_mean": ep_metrics["rotor_return_mean"],
+                "diagnostics/rotor_return_min": ep_metrics["rotor_return_min"],
+                "diagnostics/reward_task_sum": ep_metrics["reward_task_sum"],
+                "diagnostics/reward_communication_sum": ep_metrics["reward_communication_sum"],
+                "diagnostics/reward_energy_sum": ep_metrics["reward_energy_sum"],
+                "diagnostics/reward_safety_sum": ep_metrics["reward_safety_sum"],
+                "diagnostics/worst_agent_return": ep_metrics.get("worst_agent_return", 0.0),
+            }
+            for key, value in ep_metrics.items():
+                if key.startswith("agent/") and isinstance(value, (int, float)):
+                    diagnostic_scalars[f"diagnostics/{key}"] = value
+            wb.log(diagnostic_scalars)
 
             if should_report_episode(episode, total_episodes, int(progress_every)):
                 print(format_episode_progress(ep_metrics, total_episodes), flush=True)
@@ -293,6 +369,12 @@ def train_experiment(
                     f"{algorithm}-{scenario}-periodic",
                     aliases=["latest", f"episode-{episode}"],
                 )
+                # Scalar W&B panels are the primary live monitor. Refresh only the
+                # three high-value visual summaries to keep media volume bounded.
+                preview_paths = plot_training_curves(logger.episode_csv, logger.plots_dir)
+                for preview in preview_paths:
+                    if preview.name in {"reward.png", "group_returns.png", "reward_components.png"}:
+                        wb.log_image(preview, f"live_plots/{preview.stem}")
 
         algo.save(logger.checkpoint_dir / "final.pt")
         plot_training_curves(logger.episode_csv, logger.plots_dir)
@@ -316,6 +398,16 @@ def train_experiment(
             eval_env.agents,
             eval_env.agent_types,
             logger.plots_dir / "trajectory.png",
+            eval_env.area_size_m,
+        )
+        plot_simulation_scenario(
+            np.asarray(eval_env.trajectory)[0],
+            eval_env.targets,
+            eval_env.obstacles,
+            eval_env.agents,
+            eval_env.agent_types,
+            eval_env.rotor_leaders,
+            logger.plots_dir / "fig06_simulation_scenario.png",
             eval_env.area_size_m,
         )
         with (run_dir / "evaluation.json").open("w", encoding="utf-8") as f:

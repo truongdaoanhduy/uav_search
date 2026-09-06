@@ -62,13 +62,13 @@ def test_channel_fallbacks_are_reference_backed_not_paper_explicit():
     assert ref["nlos_extra_loss_db"] == 20.0
 
 
-def test_pcom_is_paper_explicit_but_a2a_tx_power_is_not():
+def test_pcom_is_paper_explicit_and_a2a_tx_power_is_reference_backed():
     cfg = load_config("masac", "f1_m5")
-    # Table I publishes communication-energy power P_com = 5 W.
+    # Root-paper Table I publishes communication-energy power P_com = 5 W.
     assert cfg["paper"]["communication_power_w"] == 5
-    # Eq. (6) uses a distinct transmit-power symbol P_tx,u, but the paper
-    # does not publish its numeric value. Preserve the current fallback.
-    assert cfg["assumed"]["tx_power_w"] == 5.0
+    # Root-paper Ref. [39] Table III publishes UAV transmit power = 40 dBm = 10 W.
+    assert cfg["reference_backed"]["tx_power_w"] == 10.0
+    assert "tx_power_w" not in cfg["assumed"]
 
 
 def test_paper_evaluation_uses_5000_random_test_cases():

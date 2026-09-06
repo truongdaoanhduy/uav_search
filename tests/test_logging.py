@@ -48,12 +48,12 @@ def test_run_logger_writes_metrics_low_episode_and_error(tmp_path):
 def test_visualizers_create_expected_pngs(tmp_path):
     metrics = tmp_path / "episodes.csv"
     pd.DataFrame([
-        {"episode": 1, "return_mean": 1.0, "search_rate": 0.2, "energy_j": 100.0, "mean_broken_link_s": 1.0},
-        {"episode": 2, "return_mean": 2.0, "search_rate": 0.4, "energy_j": 120.0, "mean_broken_link_s": 0.5},
+        {"episode": 1, "return_mean": 1.0, "return_sum": 6.0, "search_rate": 0.2, "energy_j": 100.0, "energy_consumption_pct": 10.0, "mean_broken_link_s": 1.0, "fixed_return_mean": 2.0, "rotor_return_mean": 0.8, "rotor_return_min": 0.3, "reward_task_sum": 3.0, "reward_communication_sum": -1.0, "reward_energy_sum": 2.0, "reward_safety_sum": -0.5},
+        {"episode": 2, "return_mean": 2.0, "return_sum": 12.0, "search_rate": 0.4, "energy_j": 120.0, "energy_consumption_pct": 12.0, "mean_broken_link_s": 0.5, "fixed_return_mean": 3.0, "rotor_return_mean": 1.8, "rotor_return_min": 1.1, "reward_task_sum": 5.0, "reward_communication_sum": 0.0, "reward_energy_sum": 2.1, "reward_safety_sum": -0.2},
     ]).to_csv(metrics, index=False)
     out = tmp_path / "plots"
     paths = plot_training_curves(metrics, out)
-    assert {p.name for p in paths} == {"reward.png", "search_rate.png", "energy.png", "broken_link.png"}
+    assert {p.name for p in paths} == {"reward.png", "search_rate.png", "energy.png", "broken_link.png", "group_returns.png", "reward_components.png"}
     assert all(p.exists() and p.stat().st_size > 0 for p in paths)
 
     trajectory = np.zeros((3, 2, 3), dtype=float)
@@ -64,3 +64,21 @@ def test_visualizers_create_expected_pngs(tmp_path):
         ["fixed_0", "rotor_0"], [0, 1], out / "trajectory.png", area_size_m=5000,
     )
     assert p.exists() and p.stat().st_size > 0
+
+
+def test_warmup_low_search_alone_is_not_reported_as_an_anomaly(tmp_path):
+    logger = RunLogger(tmp_path, low_window=5)
+    payload = logger.log_episode({
+        "episode": 1,
+        "phase": "warmup",
+        "return_mean": 0.0,
+        "search_rate": 0.0,
+        "mean_broken_link_s": 0.0,
+        "mean_comm_rate_mbps": 5.0,
+        "collisions": 0,
+        "obstacle_hits": 0,
+        "min_battery_pct": 100.0,
+        "action_saturation": 0.0,
+        "critic_loss": 0.0,
+    })
+    assert payload is None
