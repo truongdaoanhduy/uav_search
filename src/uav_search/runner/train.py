@@ -42,7 +42,6 @@ def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUA
     obs = _obs_array(obs_dict, env.agents)
     returns = np.zeros(env.n_agents, dtype=np.float64)
     info: dict[str, Any] = {}
-    collision_sum = obstacle_sum = boundary_sum = 0
     comm_rates: list[float] = []
     saturations: list[float] = []
     for _ in range(env.max_steps):
@@ -50,9 +49,6 @@ def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUA
         action_dict = {a: action[i] for i, a in enumerate(env.agents)}
         next_dict, reward_dict, _, truncated, info = env.step(action_dict)
         returns += np.asarray([reward_dict[a] for a in env.agents], dtype=np.float64)
-        collision_sum += int(info["collisions"])
-        obstacle_sum += int(info["obstacle_hits"])
-        boundary_sum += int(info["boundary_hits"])
         comm_rates.append(float(info["mean_comm_rate_mbps"]))
         saturations.append(float(info["action_saturation"]))
         obs = _obs_array(next_dict, env.agents)
@@ -67,10 +63,12 @@ def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUA
         "energy_consumption_pct": float(info.get("energy_consumption_pct", 0.0)),
         "mean_broken_link_s": float(info.get("mean_broken_link_s", 0.0)),
         "max_broken_link_s": float(info.get("max_broken_link_s", 0.0)),
-        "collisions": collision_sum,
-        "obstacle_hits": obstacle_sum,
-        "boundary_hits": boundary_sum,
-        "min_battery_pct": float(info.get("min_battery_pct", 100.0)),
+        "collided_uavs": int(info.get("collided_uavs", 0)),
+        "obstacle_hit_uavs": int(info.get("obstacle_hit_uavs", 0)),
+        "boundary_hit_uavs": int(info.get("boundary_hit_uavs", 0)),
+        "broken_link_uavs": int(info.get("broken_link_uavs", 0)),
+        "depleted_uavs": int(info.get("depleted_uavs", 0)),
+        "avg_battery_pct": float(info.get("avg_battery_pct", 100.0)),
         "mean_comm_rate_mbps": float(np.mean(comm_rates)) if comm_rates else 0.0,
         "action_saturation": float(np.mean(saturations)) if saturations else 0.0,
     }
@@ -89,10 +87,10 @@ def train_experiment(
     wandb_api_key: str | None = None,
     run_name: str | None = None,
     runtime_overrides: dict[str, Any] | None = None,
-    deterministic: bool = False,
+    deterministic: bool = True,
     amp_mode: str = "auto",
     wandb_mode: str = "auto",
-    progress_every: int = 10,
+    progress_every: int = 100,
 ) -> Path:
     if int(progress_every) < 1:
         raise ValueError("progress_every must be >= 1")
@@ -173,15 +171,11 @@ def train_experiment(
             obs_dict, _ = env.reset(seed=seed + episode - 1)
             obs = _obs_array(obs_dict, env.agents)
             ep_returns = np.zeros(env.n_agents, dtype=np.float64)
-            collision_sum = obstacle_sum = boundary_sum = 0
             comm_rates: list[float] = []
             saturations: list[float] = []
             reward_component_sums = {
-                name: {"communication": 0.0, "energy": 0.0, "safety": 0.0, "task": 0.0}
-                for name in env.agents
+                "communication": 0.0, "energy": 0.0, "safety": 0.0, "task": 0.0
             }
-            agent_saturation_sums = {name: 0.0 for name in env.agents}
-            agent_comm_rate_sums = {name: 0.0 for name in env.agents if name.startswith("rotor_")}
             last_info: dict[str, Any] = {}
 
             for step in range(1, env.max_steps + 1):
@@ -201,18 +195,11 @@ def train_experiment(
                 ep_returns += rewards
                 obs = next_obs
                 global_step += 1
-                collision_sum += int(last_info["collisions"])
-                obstacle_sum += int(last_info["obstacle_hits"])
-                boundary_sum += int(last_info["boundary_hits"])
                 comm_rates.append(float(last_info["mean_comm_rate_mbps"]))
                 saturations.append(float(last_info["action_saturation"]))
-                for agent_name, components in last_info.get("agent_reward_components", {}).items():
-                    for component in ("communication", "energy", "safety", "task"):
-                        reward_component_sums[agent_name][component] += float(components.get(component, 0.0))
-                for agent_name, value in last_info.get("agent_action_saturation", {}).items():
-                    agent_saturation_sums[agent_name] += float(value)
-                for agent_name, value in last_info.get("agent_comm_rate_mbps", {}).items():
-                    agent_comm_rate_sums[agent_name] += float(value)
+                step_components = last_info.get("reward_components_sum", {})
+                for component in ("communication", "energy", "safety", "task"):
+                    reward_component_sums[component] += float(step_components.get(component, 0.0))
 
                 if (
                     global_step >= int(cfg["runtime"]["update_after"])
@@ -225,7 +212,9 @@ def train_experiment(
                             latest_update = metrics
                             update_row = {"update": update_index, "global_step": global_step, **metrics}
                             logger.log_update(update_row)
-                            wb.log({f"update/{k}": v for k, v in update_row.items()})
+                            wandb_update_every = int(cfg["runtime"].get("wandb_update_every", 100))
+                            if update_index % max(1, wandb_update_every) == 0:
+                                wb.log({f"update/{k}": v for k, v in update_row.items()})
                 if all(truncated.values()) or all(terminated.values()):
                     break
 
@@ -249,10 +238,12 @@ def train_experiment(
                 "energy_consumption_pct": float(last_info.get("energy_consumption_pct", 0.0)),
                 "mean_broken_link_s": float(last_info.get("mean_broken_link_s", 0.0)),
                 "max_broken_link_s": float(last_info.get("max_broken_link_s", 0.0)),
-                "collisions": collision_sum,
-                "obstacle_hits": obstacle_sum,
-                "boundary_hits": boundary_sum,
-                "min_battery_pct": float(last_info.get("min_battery_pct", 100.0)),
+                "collided_uavs": int(last_info.get("collided_uavs", 0)),
+                "obstacle_hit_uavs": int(last_info.get("obstacle_hit_uavs", 0)),
+                "boundary_hit_uavs": int(last_info.get("boundary_hit_uavs", 0)),
+                "broken_link_uavs": int(last_info.get("broken_link_uavs", 0)),
+                "depleted_uavs": int(last_info.get("depleted_uavs", 0)),
+                "avg_battery_pct": float(last_info.get("avg_battery_pct", 100.0)),
                 "action_saturation": float(np.mean(saturations)) if saturations else 0.0,
                 "mean_comm_rate_mbps": float(np.mean(comm_rates)) if comm_rates else 0.0,
                 "critic_loss": float(latest_update.get("critic_loss", 0.0)),
@@ -273,22 +264,7 @@ def train_experiment(
             ep_metrics["rotor_return_mean"] = float(rotor_returns.mean()) if len(rotor_returns) else 0.0
             ep_metrics["rotor_return_min"] = float(rotor_returns.min()) if len(rotor_returns) else 0.0
             for component in ("task", "communication", "energy", "safety"):
-                ep_metrics[f"reward_{component}_sum"] = float(
-                    sum(parts[component] for parts in reward_component_sums.values())
-                )
-            for i, agent_name in enumerate(env.agents):
-                prefix = f"agent/{agent_name}/"
-                ep_metrics[prefix + "return"] = float(ep_returns[i])
-                for component in ("task", "communication", "energy", "safety"):
-                    ep_metrics[prefix + f"{component}_reward"] = float(reward_component_sums[agent_name][component])
-                ep_metrics[prefix + "battery_pct"] = float(last_info.get("agent_battery_pct", {}).get(agent_name, 100.0))
-                ep_metrics[prefix + "action_saturation"] = float(agent_saturation_sums[agent_name] / max(1, episode_steps))
-                if agent_name.startswith("rotor_"):
-                    ep_metrics[prefix + "comm_rate_mbps"] = float(agent_comm_rate_sums.get(agent_name, 0.0) / max(1, episode_steps))
-                    ep_metrics[prefix + "broken_link_s"] = float(last_info.get("agent_broken_link_s", {}).get(agent_name, 0.0))
-                    ep_metrics[prefix + "energy_consumption_pct"] = float(
-                        last_info.get("agent_energy_consumption_pct", {}).get(agent_name, 0.0)
-                    )
+                ep_metrics[f"reward_{component}_sum"] = float(reward_component_sums[component])
             warmup_steps = int(cfg["runtime"]["warmup_steps"])
             if global_step <= warmup_steps:
                 ep_metrics["phase"] = "warmup"
@@ -327,31 +303,46 @@ def train_experiment(
             low_payload = logger.log_episode(ep_metrics)
             if low_payload is not None:
                 wb.log_low_episode(low_payload)
-            wb.log({f"train/{k}": v for k, v in ep_metrics.items()})
-            wb.log({f"performance/{k}": v for k, v in performance_metrics.items()})
-            wb.log({
+            # Keep W&B compact: one aggregate payload per episode. Detailed raw
+            # optimizer updates remain in local CSV and are mirrored only every N updates.
+            wandb_episode = {
                 "paper/episode": episode,
                 "paper/reward_total": ep_metrics["return_sum"],
                 "paper/targets_found": ep_metrics["targets_found"],
                 "paper/search_rate": ep_metrics["search_rate"],
                 "paper/energy_consumption_pct": ep_metrics["energy_consumption_pct"],
                 "paper/broken_link_duration_s": ep_metrics["mean_broken_link_s"],
-            })
-            diagnostic_scalars: dict[str, Any] = {
-                "diagnostics/episode": episode,
-                "diagnostics/fixed_return_mean": ep_metrics["fixed_return_mean"],
-                "diagnostics/rotor_return_mean": ep_metrics["rotor_return_mean"],
-                "diagnostics/rotor_return_min": ep_metrics["rotor_return_min"],
-                "diagnostics/reward_task_sum": ep_metrics["reward_task_sum"],
-                "diagnostics/reward_communication_sum": ep_metrics["reward_communication_sum"],
-                "diagnostics/reward_energy_sum": ep_metrics["reward_energy_sum"],
-                "diagnostics/reward_safety_sum": ep_metrics["reward_safety_sum"],
-                "diagnostics/worst_agent_return": ep_metrics.get("worst_agent_return", 0.0),
+                "swarm/episode": episode,
+                "swarm/avg_battery_pct": ep_metrics["avg_battery_pct"],
+                "swarm/depleted_uavs": ep_metrics["depleted_uavs"],
+                "swarm/collided_uavs": ep_metrics["collided_uavs"],
+                "swarm/obstacle_hit_uavs": ep_metrics["obstacle_hit_uavs"],
+                "swarm/boundary_hit_uavs": ep_metrics["boundary_hit_uavs"],
+                "swarm/broken_link_uavs": ep_metrics["broken_link_uavs"],
+                "swarm/avg_comm_rate_mbps": ep_metrics["mean_comm_rate_mbps"],
+                "swarm/avg_broken_link_s": ep_metrics["mean_broken_link_s"],
+                "group/episode": episode,
+                "group/fixed_return_mean": ep_metrics["fixed_return_mean"],
+                "group/rotor_return_mean": ep_metrics["rotor_return_mean"],
+                "reward/episode": episode,
+                "reward/task": ep_metrics["reward_task_sum"],
+                "reward/communication": ep_metrics["reward_communication_sum"],
+                "reward/energy": ep_metrics["reward_energy_sum"],
+                "reward/safety": ep_metrics["reward_safety_sum"],
+                "rl/episode": episode,
+                "rl/actor_loss": ep_metrics["actor_loss"],
+                "rl/critic_loss": ep_metrics["critic_loss"],
+                "rl/q_mean": ep_metrics["q_mean"],
+                "rl/td_error": ep_metrics["td_error_abs_mean"],
+                "performance/episode": episode,
+                "performance/env_steps_per_sec": ep_metrics["env_steps_per_sec"],
+                "performance/updates_per_sec": ep_metrics["updates_per_sec"],
+                "performance/episode_sec": ep_metrics["episode_sec"],
             }
-            for key, value in ep_metrics.items():
-                if key.startswith("agent/") and isinstance(value, (int, float)):
-                    diagnostic_scalars[f"diagnostics/{key}"] = value
-            wb.log(diagnostic_scalars)
+            if algorithm.lower() == "masac":
+                wandb_episode["rl/entropy"] = ep_metrics["entropy"]
+                wandb_episode["rl/alpha"] = ep_metrics["alpha"]
+            wb.log(wandb_episode)
 
             if should_report_episode(episode, total_episodes, int(progress_every)):
                 print(format_episode_progress(ep_metrics, total_episodes), flush=True)

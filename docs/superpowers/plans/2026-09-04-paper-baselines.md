@@ -1,5 +1,8 @@
 # Paper Baselines Implementation Plan
 
+> **Historical plan:** Later paper-fidelity work superseded architecture details in this plan. See `docs/PAPER_MAPPING.md` and `docs/PAPER_FIDELITY.md` for current behavior.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a minimal, modular reproduction of the paper simulation for MASAC, MATD3, and MADDPG on the 1x5 and 1x9 scenarios.

@@ -1,6 +1,6 @@
 algorithm:
   name: maddpg
   gamma: 0.99
-  tau: 0.01
+  tau: 0.01  # Equivalent to paper epsilon=0.99: target <- 0.99*target + 0.01*online.
   actor_lr: 0.001
   critic_lr: 0.001

@@ -74,9 +74,9 @@ class RunLogger:
             signals.append("communication_low")
             if "link_unstable" not in signals:
                 signals.append("link_unstable")
-        if int(metrics.get("collisions", 0)) > 0 or int(metrics.get("obstacle_hits", 0)) > 0:
+        if int(metrics.get("collided_uavs", 0)) > 0 or int(metrics.get("obstacle_hit_uavs", 0)) > 0:
             signals.append("collision_high")
-        if float(metrics.get("min_battery_pct", 100.0)) <= 15.0:
+        if int(metrics.get("depleted_uavs", 0)) > 0 or float(metrics.get("avg_battery_pct", 100.0)) <= 15.0:
             signals.append("energy_high")
         if float(metrics.get("action_saturation", 0.0)) >= 0.8:
             signals.append("action_saturated")
@@ -90,7 +90,7 @@ class RunLogger:
         critical = {"critic_unstable"}
         if critical.intersection(signals):
             return "critical"
-        if int(metrics.get("collisions", 0)) >= 3 or float(metrics.get("min_battery_pct", 100.0)) <= 5.0:
+        if int(metrics.get("collided_uavs", 0)) >= 3 or int(metrics.get("depleted_uavs", 0)) > 0:
             return "critical"
         if len(signals) >= 4:
             return "critical"

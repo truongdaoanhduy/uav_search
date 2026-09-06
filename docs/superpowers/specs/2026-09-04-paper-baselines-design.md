@@ -1,5 +1,8 @@
 # Paper Baselines Design
 
+> **Historical / superseded:** This design predates the 2026-09-06 paper-fidelity refactor. The active implementation now uses one Actor and centralized Critic per UAV (twin Critics for MATD3/MASAC); `docs/PAPER_MAPPING.md` is authoritative for current behavior.
+
+
 ## Goal
 Reproduce the software-simulation portion of Ao et al., *Heterogeneous UAVs Trajectory Optimization for Post-Disaster Target Search Based on MARL With Graph Attention Network* (DOI 10.1109/TVT.2025.3594534), restricted to the three requested baselines: MASAC, MATD3, and MADDPG. Hardware experiments, GATAC, and SA-GATAC are excluded.
 

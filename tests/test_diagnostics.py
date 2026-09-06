@@ -9,53 +9,55 @@ def test_current_reproduction_scope_defaults_to_fig7_small_scale_scenarios():
     assert ACTIVE_SCENARIOS == ("f1_m5", "f1_m9")
 
 
-def test_environment_exposes_per_agent_reward_network_and_energy_diagnostics():
+def test_environment_exposes_aggregate_reward_and_swarm_diagnostics_only():
     cfg = load_config("masac", "f1_m5")
     env = PaperUAVEnv(cfg, seed=123)
     env.reset(seed=123)
     actions = {name: np.zeros(2, dtype=np.float32) for name in env.agents}
     _, rewards, _, _, info = env.step(actions)
 
-    components = info["agent_reward_components"]
-    assert set(components) == set(env.agents)
-    assert set(components["rotor_0"]) == {"communication", "energy", "safety", "task", "total"}
-    assert set(components["fixed_0"]) == {"communication", "energy", "safety", "task", "total"}
-    for name in env.agents:
-        assert np.isclose(components[name]["total"], rewards[name])
+    components = info["reward_components_sum"]
+    assert set(components) == {"communication", "energy", "safety", "task", "total"}
+    assert np.isclose(components["total"], sum(rewards.values()))
+    for forbidden in [
+        "agent_reward_components", "agent_battery_pct", "agent_action_saturation",
+        "agent_broken_link_s", "agent_comm_rate_mbps", "agent_energy_consumption_pct",
+        "agent_energy_used_j",
+    ]:
+        assert forbidden not in info
 
-    assert set(info["agent_battery_pct"]) == set(env.agents)
-    assert set(info["agent_action_saturation"]) == set(env.agents)
-    assert set(info["agent_broken_link_s"]) == {f"rotor_{i}" for i in range(env.n_rotor)}
-    assert set(info["agent_comm_rate_mbps"]) == {f"rotor_{i}" for i in range(env.n_rotor)}
     expected_pct = 100.0 - float(np.mean(env.battery_pct[env.multirotor_indices]))
     assert np.isclose(info["energy_consumption_pct"], expected_pct)
+    assert np.isclose(info["avg_battery_pct"], float(np.mean(env.battery_pct[env.multirotor_indices])))
+    for key in ["collided_uavs", "obstacle_hit_uavs", "boundary_hit_uavs", "broken_link_uavs", "depleted_uavs"]:
+        assert key in info
+        assert isinstance(info[key], int)
+        assert 0 <= info[key] <= env.n_agents
 
 
-def test_diagnose_episode_identifies_single_rotor_communication_failure():
+def test_diagnose_episode_uses_aggregate_swarm_signals_for_communication_failure():
     metrics = {
         "episode": 31000,
         "phase": "post_convergence_reference",
         "search_rate": 0.1,
         "critic_loss": 2.0,
-        "collisions": 0,
-        "obstacle_hits": 0,
-        "agent/fixed_0/return": 80.0,
-        "agent/rotor_0/return": 75.0,
-        "agent/rotor_1/return": -100.0,
-        "agent/rotor_2/return": 78.0,
-        "agent/rotor_3/return": 76.0,
-        "agent/rotor_4/return": 77.0,
-        "agent/rotor_1/comm_rate_mbps": 0.2,
-        "agent/rotor_1/broken_link_s": 12.0,
-        "agent/rotor_1/battery_pct": 91.0,
-        "agent/rotor_1/safety_reward": 0.0,
-        "agent/rotor_1/task_reward": 0.0,
-        "agent/rotor_1/action_saturation": 0.1,
+        "collided_uavs": 0,
+        "obstacle_hit_uavs": 0,
+        "boundary_hit_uavs": 0,
+        "broken_link_uavs": 2,
+        "depleted_uavs": 0,
+        "avg_battery_pct": 91.0,
+        "mean_comm_rate_mbps": 0.2,
+        "mean_broken_link_s": 12.0,
+        "fixed_return_mean": 80.0,
+        "rotor_return_mean": 10.0,
+        "reward_task_sum": 0.0,
+        "reward_safety_sum": 0.0,
     }
     diagnosis = diagnose_episode(metrics)
-    assert diagnosis["failure_scope"] == "single_agent"
-    assert diagnosis["worst_agent"] == "rotor_1"
+    assert diagnosis["failure_scope"] == "rotor_group"
     assert diagnosis["primary_cause"] == "communication"
+    assert "worst_agent" not in diagnosis
 
 
 def test_diagnose_episode_prioritizes_rl_instability_for_swarm_wide_collapse():
@@ -64,13 +66,16 @@ def test_diagnose_episode_prioritizes_rl_instability_for_swarm_wide_collapse():
         "phase": "post_convergence_reference",
         "search_rate": 0.0,
         "critic_loss": 1e8,
-        "agent/fixed_0/return": -200.0,
-        "agent/rotor_0/return": -300.0,
-        "agent/rotor_1/return": -310.0,
-        "agent/rotor_2/return": -290.0,
-        "agent/rotor_3/return": -305.0,
-        "agent/rotor_4/return": -295.0,
+        "collided_uavs": 0,
+        "obstacle_hit_uavs": 0,
+        "boundary_hit_uavs": 0,
+        "broken_link_uavs": 0,
+        "depleted_uavs": 0,
+        "avg_battery_pct": 90.0,
+        "fixed_return_mean": -200.0,
+        "rotor_return_mean": -300.0,
     }
     diagnosis = diagnose_episode(metrics)
     assert diagnosis["failure_scope"] == "swarm"
     assert diagnosis["primary_cause"] == "rl_training_instability"
+    assert "worst_agent" not in diagnosis

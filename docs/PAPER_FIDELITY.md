@@ -100,7 +100,7 @@ The original paper does not publish enough numerical information to reproduce th
 | Fixed-wing detection distance `D_detect-f` | 1500 m |
 | Safety distance `D_safe` | 100 m |
 | Fixed-wing maximum yaw-rate mapping | 0.35 rad/s |
-| A2A transmit power `P_tx,u` in Eq. (6) | 5 W (preserved fallback; paper gives no numeric value) |
+| A2A transmit power `P_tx,u` in Eq. (6) | 10 W from root-paper Ref. [39] Table III (`REFERENCE_BACKED`, not root-paper explicit) |
 | Battery capacity in joules | 1,000,000 J |
 | `P0` in Eq. (13) | 120 W |
 | `mu` in Eq. (13) | 0.08 |
@@ -145,7 +145,7 @@ After the paper-fidelity rewrite, it is reasonable to say:
 - the **published action and reward definitions** are represented;
 - the two requested small swarm sizes are represented.
 
-The default runtime now also follows the paper's 50,000 training rounds and 5,000 evaluation cases; command-line overrides remain available for short development smoke tests.
+The single-run configuration (`paper.yaml` / `train.py` without `--episodes`) follows the paper's 50,000 training rounds. `run_all.py` intentionally retains a 10-episode development default, so a paper-scale comparison must explicitly pass `--episodes 50000`; it then defaults to 5,000 evaluation cases. This CLI development default is an implementation convenience, not a paper parameter.
 
 It is **not** reasonable to claim exact numerical reproduction of the authors' simulator or reported curves until the unpublished constants and original source code become available.
 
@@ -155,7 +155,7 @@ The final audit against the uploaded IEEE paper identifies several points that m
 
 - **Small-scenario target count:** Fig. 7 explicitly gives only the UAV counts `(1,5)` and `(1,9)`. It does not print the number of targets for those two scenes. The current value `10` is retained as `PAPER_INFERRED`; it is not an explicit paper parameter.
 - **Sensor description is internally inconsistent:** Section III states that multi-rotor UAVs carry RSSI target-signal detectors, while the simulation-design paragraph says fixed-wing UAVs carry signal-detection devices and multi-rotors carry cameras. The baseline therefore must not claim one sensor modality as uniquely specified by the paper.
-- **Large-scale Fig. 9 text contains an internal inconsistency:** the figure caption/plots use `(4,12)` and `(8,24)`, while the prose says "four and six fixed-wing" alongside 12 and 24 multi-rotors. The current project does not implement these expansion scenarios.
+- **Large-scale Fig. 9 text contains an internal inconsistency:** the figure caption/plots use `(4,12)` and `(8,24)`, while the prose says "four and six fixed-wing" alongside 12 and 24 multi-rotors. Those expansion scenarios are configured for a later phase, but they are not in the current `ACTIVE_SCENARIOS` or default experiment scope.
 - **Observation container is padded, not byte-identical to the authors' implementation:** the contents now follow Eqs. (17)-(20), with type-inapplicable slots zero-masked so MASAC/MATD3/MADDPG can share one tensor width. GATAC importance ranking/aggregation is still outside scope.
 - **Sensing values remain numerically assumed:** target visibility now obeys `D_detect` / `D_detect-f` and found-target masking, but those sensing radii are not numerically published by the original paper and therefore remain unchanged assumptions.
 - **OpenAI MPE backend is not literal:** the paper explicitly says the simulation is based on OpenAI MPE; this repository is a custom Gymnasium/MPE-style environment rather than the authors' MPE source.

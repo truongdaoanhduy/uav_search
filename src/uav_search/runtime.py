@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import os
 import platform
 import sys
 from dataclasses import asdict, dataclass
@@ -47,6 +48,10 @@ def configure_runtime(
     deterministic: bool = False,
     amp_mode: str = "auto",
 ) -> RuntimeProfile:
+    if deterministic:
+        # Set before resolving/initializing CUDA so deterministic cuBLAS workspace
+        # policy is in place before the first matrix multiplication on the device.
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     resolved = resolve_device(device)
     amp_mode = str(amp_mode).lower()
     if amp_mode not in {"auto", "on", "off"}:
@@ -86,7 +91,7 @@ def configure_runtime(
 
 
 def system_report(device: str | torch.device = "auto") -> dict[str, object]:
-    profile = configure_runtime(device, deterministic=False, amp_mode="auto")
+    profile = configure_runtime(device, deterministic=True, amp_mode="auto")
     report: dict[str, object] = {
         "python": sys.version.split()[0],
         "platform": platform.platform(),
@@ -98,7 +103,8 @@ def system_report(device: str | torch.device = "auto") -> dict[str, object]:
         "amp_enabled": bool(profile.amp_enabled),
         "compute_capability": profile.compute_capability,
         "total_memory_gb": profile.total_memory_gb,
-        "deterministic_default": False,
+        "deterministic_default": True,
+        "deterministic_enabled": bool(profile.deterministic),
     }
     return report
 

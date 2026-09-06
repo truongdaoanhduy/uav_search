@@ -39,7 +39,7 @@ Flow:
 6. `R = B log2(1 + SINR)`;
 7. compare against the paper's 1 Mbps minimum rate.
 
-Table I publishes `P_com = 5 W` for communication-energy consumption, not a numeric value for Eq. (6) `P_tx,u`. The current `P_tx,u` fallback therefore remains under `assumed`. Other missing channel constants that were recovered from original-paper refs. [39]-[41] remain under `reference_backed`; none are labeled as original-paper explicit values.
+Table I publishes `P_com = 5 W` for communication-energy consumption, not a numeric value for Eq. (6) `P_tx,u`. Root-paper Ref. [39] Table III publishes UAV transmit power as 40 dBm = 10 W, so `P_tx,u = 10 W` is kept under `reference_backed`. Other recovered channel constants from refs. [39]-[41] are also `REFERENCE_BACKED`; none are labeled as original-paper explicit values.
 
 ## 3. UAV dynamics — paper Eq. (8)–(12)
 
@@ -70,7 +70,7 @@ and adds the constant communication power. Only multi-rotor energy is optimized/
 
 Implementation: `PaperUAVEnv._observations`.
 
-The baseline now embeds the two paper type-specific observations into one padded width required by the shared MASAC/MATD3/MADDPG implementation:
+The baseline now embeds the two paper type-specific observations into one common padded tensor width required by the baseline training interface:
 
 - common self slots are the union `{p(3), v(3), e, n, psi}`;
 - multi-rotor self-state uses `{p, v, e, n}` from Eq. (17) and masks `psi`;
@@ -135,27 +135,25 @@ Adds to MADDPG:
 - twin centralized critics;
 - entropy regularization;
 - online/target actor and target critics, following the target-network description/equations in the paper;
-- fixed entropy coefficient (`alpha`) because the paper does not publish an automatic temperature-tuning procedure.
+- independent automatic entropy-temperature tuning per UAV, following root-paper Ref. [44]; `alpha_init = 0.01` is reference-backed while the separate alpha learning rate falls back to the paper actor learning rate.
 
-Actors are parameter-shared by UAV physical type (`fixed`, `rotor`). The centralized critic outputs one Q value per agent so per-agent rewards are retained while avoiding duplicated critic boilerplate.
+Each UAV has its own Actor and centralized Critic (twin centralized Critics for MATD3/MASAC). This matches the root paper's Algorithm 1 wording that Actor/Critic parameters are initialized and updated for each UAV; actors are not parameter-shared by physical type.
 
-## 8. Scenarios implemented
+## 8. Scenario scope
+
+Current active/default reproduction scope:
 
 - `configs/scenarios/f1_m5.yaml`: 1 fixed-wing + 5 multi-rotor.
 - `configs/scenarios/f1_m9.yaml`: 1 fixed-wing + 9 multi-rotor.
 
-The article's Fig. 7 explicitly names these swarm sizes. It does not clearly state the ground-target count for the two Fig. 7 small scenarios in the available text, so the repository uses **5 targets as an ASSUMED value** for both. Change the YAML if author source code or supplementary material gives the exact value.
+The article's Fig. 7 explicitly names these swarm sizes. It does not separately print the ground-target count for Fig. 7, so both active scenario files currently use **10 targets as `PAPER_INFERRED`**, based on the paper's neighboring small-scale experiment description. This must not be presented as `PAPER_EXPLICIT`.
+
+The four larger Fig. 8-9 configurations are present as later-phase config files but are not included in `ACTIVE_SCENARIOS` or the default `run_all.py` scenario list.
 
 ## 9. Evaluation / figures
 
 The article reports results over 5,000 random test cases. `scripts/evaluate.py --episodes 5000` reproduces that evaluation count.
 
-Automatically generated code-side figures:
+Automatically generated per-run figures include the Fig. 6-style scenario map plus reward/search/energy/broken-link/group-return/reward-component/trajectory diagnostics. After all six active runs finish, `run_all.py` creates Fig. 7/10/11/12-style paper comparison figures.
 
-- `reward.png` — training return;
-- `search_rate.png` — target-search rate;
-- `energy.png` — multi-rotor energy;
-- `broken_link.png` — mean broken-link duration;
-- `trajectory.png` — post-training deterministic multi-UAV rollout over targets/obstacles.
-
-These are designed to expose the same metric families as the paper without fabricating the paper's 50,000-round curves from a short smoke run.
+These plots expose the same result families as the paper without fabricating 50,000-round results from short smoke runs. A paper-scale comparison requires `--episodes 50000 --eval-episodes 5000`.

@@ -1,5 +1,8 @@
 # GPU-Generic Fast Training + W&B Tracking Spec
 
+> **Historical / superseded:** Fast-mode-as-default no longer reflects current behavior. Paper runs are now deterministic by default, W&B telemetry is aggregate-only, and `--no-deterministic` is the explicit speed-first opt-out.
+
+
 ## Goal
 Optimize MASAC/MATD3/MADDPG execution speed without changing the paper-facing environment, reward definitions, episode length, replay/update ratio, or algorithm equations; support CPU and arbitrary CUDA GPUs; make W&B the online tracking destination when a token is passed with `--wandb-api-key`, with complete local fallback otherwise.
 

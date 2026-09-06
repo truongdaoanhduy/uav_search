@@ -40,3 +40,23 @@ def test_run_all_help_defaults_to_fig7_scope_and_exposes_eval_episodes():
     proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "run_all.py"), "--help"], cwd=ROOT, text=True, capture_output=True, check=True)
     assert "--eval-episodes" in proc.stdout
     assert "f1_m5/f1_m9" in proc.stdout
+
+
+def test_cli_defaults_to_deterministic_and_progress_100():
+    for script in ["train.py", "run_all.py"]:
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / script), "--help"],
+            cwd=ROOT, text=True, capture_output=True, check=True,
+        )
+        text = proc.stdout
+        assert "--no-deterministic" in text
+        assert "100 episodes" in text
+
+
+def test_check_system_describes_deterministic_paper_default():
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "check_system.py"), "--device", "cpu"],
+        cwd=ROOT, text=True, capture_output=True, check=True,
+    )
+    assert "Deterministic paper runs are the default" in proc.stdout
+    assert "Use --deterministic only" not in proc.stdout

@@ -39,8 +39,6 @@ assumed:
   uav_init_margin_m: 300.0
   fixed_altitude_m: 200.0
   multirotor_altitude_m: 60.0
-  n_targets: 5
-  n_obstacles: 8
   obstacle_radius_min_m: 80.0
   obstacle_radius_max_m: 220.0
   target_detect_m: 700.0
@@ -70,6 +68,7 @@ runtime:
   update_after: 256
   update_every: 1
   gradient_steps: 1
+  wandb_update_every: 100  # Tracking-only throttle; does not change optimizer updates.
   exploration_noise: 0.15
   low_episode_window: 20
   save_best: true

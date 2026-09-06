@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="auto")
     p.add_argument("--amp", choices=["auto", "on", "off"], default="auto")
-    p.add_argument("--deterministic", action="store_true")
+    p.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True, help="Deterministic same-seed paper runs by default; use --no-deterministic for maximum speed")
     p.add_argument("--output-root", default="runs")
     p.add_argument("--wandb-api-key", default=None, help="W&B API key passed directly to this process")
     p.add_argument(
@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
     )
     p.add_argument("--local-only", action="store_true")
-    p.add_argument("--progress-every", type=int, default=10)
+    p.add_argument("--progress-every", type=int, default=100, help="Print progress every 100 episodes by default")
     return p
 
 

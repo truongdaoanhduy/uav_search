@@ -16,7 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="auto", help="auto, cpu, cuda, cuda:0, ...")
     p.add_argument("--amp", choices=["auto", "on", "off"], default="auto", help="Mixed precision policy for CUDA")
-    p.add_argument("--deterministic", action="store_true", help="Use deterministic PyTorch kernels when available (slower)")
+    p.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True, help="Deterministic same-seed paper runs by default; use --no-deterministic for maximum speed")
     p.add_argument("--output-root", default="runs", help="Local mirror/fallback directory")
     p.add_argument("--wandb-api-key", default=None, help="W&B API key passed directly to this process")
     p.add_argument(
@@ -30,8 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--progress-every",
         type=int,
-        default=10,
-        help="Print training progress every N episodes; first/final always print",
+        default=100,
+        help="Print training progress every N episodes (default: every 100 episodes); first/final always print",
     )
     return p
 

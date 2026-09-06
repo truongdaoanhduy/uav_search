@@ -80,3 +80,14 @@ def test_default_training_rounds_match_paper_table_i():
     cfg = load_config("masac", "f1_m5")
     assert cfg["paper"]["training_rounds"] == 50_000
     assert cfg["runtime"]["episodes"] == 50_000
+
+
+def test_wandb_update_logging_is_throttled_by_default():
+    cfg = load_config("masac", "f1_m5")
+    assert cfg["runtime"]["wandb_update_every"] == 100
+
+
+def test_soft_update_tau_matches_paper_epsilon_convention():
+    for algorithm in ("maddpg", "matd3", "masac"):
+        cfg = load_config(algorithm, "f1_m5")
+        assert abs(cfg["algorithm"]["tau"] - (1.0 - cfg["paper"]["soft_update_epsilon"])) < 1e-12

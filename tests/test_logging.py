@@ -12,13 +12,13 @@ def test_run_logger_writes_metrics_low_episode_and_error(tmp_path):
     logger.log_episode({
         "episode": 1, "return_mean": 10.0, "search_rate": 0.6, "targets_found": 3,
         "energy_j": 1000.0, "mean_broken_link_s": 0.2, "max_broken_link_s": 0.5,
-        "collisions": 0, "obstacle_hits": 0, "min_battery_pct": 99.0,
+        "collided_uavs": 0, "obstacle_hit_uavs": 0, "depleted_uavs": 0, "avg_battery_pct": 99.0,
         "action_saturation": 0.1, "mean_comm_rate_mbps": 2.0, "critic_loss": 1.0, "actor_loss": -1.0,
     })
     low_payload = logger.log_episode({
         "episode": 2, "return_mean": -20.0, "search_rate": 0.0, "targets_found": 0,
         "energy_j": 5000.0, "mean_broken_link_s": 10.0, "max_broken_link_s": 20.0,
-        "collisions": 3, "obstacle_hits": 2, "min_battery_pct": 8.0,
+        "collided_uavs": 3, "obstacle_hit_uavs": 2, "depleted_uavs": 1, "avg_battery_pct": 8.0,
         "action_saturation": 0.95, "mean_comm_rate_mbps": 0.2, "critic_loss": 1e6, "actor_loss": 100.0,
     })
     logger.log_update({"update": 1, "critic_loss": 2.0, "actor_loss": -0.5})
@@ -75,9 +75,10 @@ def test_warmup_low_search_alone_is_not_reported_as_an_anomaly(tmp_path):
         "search_rate": 0.0,
         "mean_broken_link_s": 0.0,
         "mean_comm_rate_mbps": 5.0,
-        "collisions": 0,
-        "obstacle_hits": 0,
-        "min_battery_pct": 100.0,
+        "collided_uavs": 0,
+        "obstacle_hit_uavs": 0,
+        "depleted_uavs": 0,
+        "avg_battery_pct": 100.0,
         "action_saturation": 0.0,
         "critic_loss": 0.0,
     })

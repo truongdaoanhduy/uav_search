@@ -1,5 +1,8 @@
 # GPU-Generic Fast Training + W&B Tracking Implementation Plan
 
+> **Historical plan:** The current runtime defaults to deterministic paper runs and compact aggregate W&B telemetry. See `README.md` and `docs/WANDB_DIAGNOSTICS.md`.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make all three paper baselines faster and portable across CPU/CUDA GPUs while providing automatic W&B-online/local-fallback tracking with full diagnostics and beginner-friendly setup documentation.

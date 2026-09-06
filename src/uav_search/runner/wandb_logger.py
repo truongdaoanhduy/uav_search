@@ -104,16 +104,11 @@ class WandbLogger:
         if self.run is None or not hasattr(self.run, "define_metric"):
             return
         try:
-            self.run.define_metric("train/episode")
-            self.run.define_metric("train/*", step_metric="train/episode")
-            self.run.define_metric("performance/episode")
-            self.run.define_metric("performance/*", step_metric="performance/episode")
+            for prefix in ("paper", "swarm", "group", "reward", "rl", "performance"):
+                self.run.define_metric(f"{prefix}/episode")
+                self.run.define_metric(f"{prefix}/*", step_metric=f"{prefix}/episode")
             self.run.define_metric("update/update")
             self.run.define_metric("update/*", step_metric="update/update")
-            self.run.define_metric("diagnostics/episode")
-            self.run.define_metric("diagnostics/*", step_metric="diagnostics/episode")
-            self.run.define_metric("paper/episode")
-            self.run.define_metric("paper/*", step_metric="paper/episode")
         except Exception as exc:
             print(
                 f"[W&B WARNING] Could not define custom metric axes: "
@@ -153,7 +148,6 @@ class WandbLogger:
                 "diagnostics/low_episode": json.dumps(row, ensure_ascii=False, default=str),
                 "diagnostics/low_episode_number": int(row.get("episode", 0)),
                 "diagnostics/low_failure_scope": str(row.get("failure_scope", "unknown")),
-                "diagnostics/low_worst_agent": str(row.get("worst_agent", "unknown")),
                 "diagnostics/low_primary_cause": str(row.get("primary_cause", "unknown")),
             }
             self.run.log(payload)

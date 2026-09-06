@@ -97,14 +97,18 @@ class PaperUAVEnv:
         self.last_adjacency = np.zeros((self.n_agents, self.n_agents), dtype=np.int8)
         self.total_energy_used_j = 0.0
         self.cumulative_energy_by_rotor_j = np.zeros(self.n_rotor, dtype=np.float64)
-        self.last_reward_components = {
-            name: {"communication": 0.0, "energy": 0.0, "safety": 0.0, "task": 0.0, "total": 0.0}
-            for name in self.agents
+        self.last_reward_components_sum = {
+            "communication": 0.0, "energy": 0.0, "safety": 0.0, "task": 0.0, "total": 0.0
         }
-        self.last_action_saturation_by_agent = np.zeros(self.n_agents, dtype=np.float64)
         self.collision_count = 0
         self.obstacle_hits = 0
         self.boundary_hits = 0
+        # Episode-level unique UAV counts are diagnostic aggregates only; they do
+        # not change the paper reward, dynamics, termination, or observations.
+        self.episode_collided_uavs: set[int] = set()
+        self.episode_obstacle_hit_uavs: set[int] = set()
+        self.episode_boundary_hit_uavs: set[int] = set()
+        self.episode_broken_link_uavs: set[int] = set()
         self.trajectory = [self.positions.copy()]
         self._refresh_links()
         return self._observations(), self._info(step_energy_j=0.0, action_saturation=0.0)
@@ -327,8 +331,7 @@ class PaperUAVEnv:
         if act.shape != (self.n_agents, 2):
             raise ValueError(f"Expected actions {(self.n_agents, 2)}, got {act.shape}")
         act = np.clip(act, -1.0, 1.0)
-        self.last_action_saturation_by_agent = np.mean(np.abs(act) > 0.95, axis=1).astype(np.float64)
-        action_saturation = float(np.mean(self.last_action_saturation_by_agent))
+        action_saturation = float(np.mean(np.abs(act) > 0.95))
         step_energy = 0.0
         self.collision_count = 0
         self.obstacle_hits = 0
@@ -368,11 +371,14 @@ class PaperUAVEnv:
 
         before_clip = self.positions[:, :2].copy()
         self.positions[:, :2] = np.clip(self.positions[:, :2], 0.0, self.area_size_m)
-        self.boundary_hits = int(np.sum(np.any(np.abs(before_clip - self.positions[:, :2]) > 1e-9, axis=1)))
+        boundary_mask = np.any(np.abs(before_clip - self.positions[:, :2]) > 1e-9, axis=1)
+        self.boundary_hits = int(np.sum(boundary_mask))
+        self.episode_boundary_hit_uavs.update(int(i) for i in np.flatnonzero(boundary_mask))
 
         for i in range(self.n_agents):
             if any(circle_collision(self.positions[i, :2], c) for c in self.obstacles):
                 self.obstacle_hits += 1
+                self.episode_obstacle_hit_uavs.add(int(i))
                 # C3 in the paper excludes the obstacle domain. Reject the candidate
                 # displacement rather than adding an unpublished reward penalty.
                 self.positions[i, :2] = previous_xy[i]
@@ -382,10 +388,13 @@ class PaperUAVEnv:
             for j in range(i + 1, self.n_agents):
                 if np.linalg.norm(self.positions[i] - self.positions[j]) <= self.assumed["safety_distance_m"]:
                     self.collision_count += 1
+                    self.episode_collided_uavs.update((int(i), int(j)))
 
         self._refresh_links()
         broken_mask = self.last_rates_bps < self.paper["min_comm_rate_bps"]
         self.cumulative_broken_time += broken_mask.astype(np.float64) * self.dt
+        for local_idx in np.flatnonzero(broken_mask):
+            self.episode_broken_link_uavs.add(int(self.multirotor_indices[int(local_idx)]))
         self.total_energy_used_j += step_energy
 
         rewards: dict[str, float] = {}
@@ -409,7 +418,10 @@ class PaperUAVEnv:
                 "task": task,
                 "total": total,
             }
-        self.last_reward_components = components
+        self.last_reward_components_sum = {
+            key: float(sum(values[key] for values in components.values()))
+            for key in ("communication", "energy", "safety", "task", "total")
+        }
 
         # Confirm only after computing Eq. (24), so the discovering UAV receives zeta on this step.
         for k in range(self.n_targets):
@@ -430,7 +442,6 @@ class PaperUAVEnv:
     def _info(self, step_energy_j: float, action_saturation: float) -> dict[str, Any]:
         rates = self.last_rates_bps if self.n_rotor else np.array([0.0])
         broken = rates < self.paper["min_comm_rate_bps"]
-        rotor_names = [self.agents[i] for i in self.multirotor_indices]
         rotor_battery = self.battery_pct[self.multirotor_indices] if self.n_rotor else np.array([100.0])
         return {
             "step": self.step_count,
@@ -440,6 +451,12 @@ class PaperUAVEnv:
             "energy_used_j": float(step_energy_j),
             "total_energy_used_j": float(self.total_energy_used_j),
             "energy_consumption_pct": float(100.0 - np.mean(rotor_battery)) if self.n_rotor else 0.0,
+            "avg_battery_pct": float(np.mean(rotor_battery)) if self.n_rotor else 100.0,
+            "depleted_uavs": int(np.sum(rotor_battery <= 0.0)) if self.n_rotor else 0,
+            "collided_uavs": int(len(self.episode_collided_uavs)),
+            "obstacle_hit_uavs": int(len(self.episode_obstacle_hit_uavs)),
+            "boundary_hit_uavs": int(len(self.episode_boundary_hit_uavs)),
+            "broken_link_uavs": int(len(self.episode_broken_link_uavs)),
             "mean_comm_rate_mbps": float(np.mean(rates) / 1e6),
             "min_comm_rate_mbps": float(np.min(rates) / 1e6),
             "broken_links": int(np.sum(broken)),
@@ -450,21 +467,5 @@ class PaperUAVEnv:
             "boundary_hits": int(self.boundary_hits),
             "min_battery_pct": float(np.min(rotor_battery)) if self.n_rotor else 100.0,
             "action_saturation": float(action_saturation),
-            "agent_reward_components": {name: dict(values) for name, values in self.last_reward_components.items()},
-            "agent_battery_pct": {name: float(self.battery_pct[i]) for i, name in enumerate(self.agents)},
-            "agent_action_saturation": {
-                name: float(self.last_action_saturation_by_agent[i]) for i, name in enumerate(self.agents)
-            },
-            "agent_comm_rate_mbps": {
-                name: float(self.last_rates_bps[k] / 1e6) for k, name in enumerate(rotor_names)
-            },
-            "agent_broken_link_s": {
-                name: float(self.cumulative_broken_time[k]) for k, name in enumerate(rotor_names)
-            },
-            "agent_energy_consumption_pct": {
-                name: float(100.0 - self.battery_pct[self.multirotor_indices[k]]) for k, name in enumerate(rotor_names)
-            },
-            "agent_energy_used_j": {
-                name: float(self.cumulative_energy_by_rotor_j[k]) for k, name in enumerate(rotor_names)
-            },
+            "reward_components_sum": dict(self.last_reward_components_sum),
         }
