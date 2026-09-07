@@ -19,6 +19,8 @@ PAPER_SCENARIOS = (
     "f8_m24",
 )
 PAPER_ALGORITHMS = ("masac", "matd3", "maddpg")
+RESEARCH_SCENARIOS = ("u6",)
+ALL_SCENARIOS = PAPER_SCENARIOS + RESEARCH_SCENARIOS
 
 # Current reproduction phase: Fig. 7 small-scale experiments only.
 # The remaining paper scenarios stay configured for later phases.
@@ -44,7 +46,7 @@ def load_config(algorithm: str, scenario: str) -> dict[str, Any]:
     algorithm = algorithm.lower()
     if algorithm not in PAPER_ALGORITHMS:
         raise ValueError(f"Unsupported algorithm: {algorithm}")
-    if scenario not in PAPER_SCENARIOS:
+    if scenario not in ALL_SCENARIOS:
         raise ValueError(f"Unknown scenario: {scenario}")
     scenario_path = CONFIG_DIR / "scenarios" / f"{scenario}.yaml"
     algo_path = CONFIG_DIR / "algorithms" / f"{algorithm}.yaml"

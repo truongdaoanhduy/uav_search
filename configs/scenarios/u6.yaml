@@ -1,0 +1,21 @@
+scenario:
+  name: u6
+  architecture: homogeneous_peer
+  # Research adaptation: six identical multi-rotor UAVs, no leader/follower.
+  fixed_wing: 0
+  multirotor: 6
+  num_uavs: 6
+  targets: 10
+  targets_provenance: PAPER_INFERRED
+  obstacles: 6
+  obstacles_provenance: ASSUMED
+  # The root paper has no explicit command-center coordinate because fixed-wing
+  # UAVs are the relay layer. The peer adaptation needs one report sink.
+  gcs_position_m: [2500.0, 2500.0, 0.0]
+  gcs_position_provenance: ADAPTED_ASSUMPTION
+  report_bytes: 1000000
+  report_bytes_provenance: ADAPTED_ASSUMPTION
+  buffer_bytes: 8000000
+  buffer_bytes_provenance: ADAPTED_ASSUMPTION
+  delivery_reward: 20.0
+  delivery_reward_provenance: ADAPTED_ASSUMPTION

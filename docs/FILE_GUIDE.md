@@ -23,13 +23,13 @@ uav_search/
 
 **`algorithms/*.yaml`** — only algorithm-specific hyperparameters. Adding a new baseline later should generally start here plus one algorithm module.
 
-**`scenarios/*.yaml`** — swarm/target/obstacle counts. Scenario scaling therefore does not require editing Python code.
+**`scenarios/*.yaml`** — swarm/target/obstacle counts. `f*_m*` files are paper-reproduction scenarios; `u6.yaml` is the homogeneous peer research adaptation and also contains the adapted GCS/report/buffer parameters.
 
 ## `src/uav_search/envs/`
 
 **`models.py`** — pure physical/model functions: A2A communication rate, multi-rotor power, circle collision. Kept separate so radio/energy models can later be replaced independently.
 
-**`paper_env.py`** — stateful simulator: randomized scenario reset, fixed-wing/multi-rotor motion, target confirmation, link tracking, rewards, observations, episode metrics, and trajectory history.
+**`paper_env.py`** — stateful root-paper MPE-style simulator: randomized scenario reset, fixed-wing/multi-rotor motion, target confirmation, link tracking, rewards, observations, episode metrics, and trajectory history. In `u6` mode the same simulator switches to six identical multi-rotors, all-pair peer links, finite report buffers, one-hop-per-step forwarding, and a GCS report sink.
 
 ## `src/uav_search/algorithms/`
 
@@ -72,7 +72,9 @@ uav_search/
 ## `tests/`
 
 - `test_config.py` — paper constants/provenance/scenario merge.
-- `test_env.py` — simulator determinism, output contract, target confirmation, episode length, physics monotonicity.
+- `test_env.py` — legacy paper simulator determinism, output contract, target confirmation, episode length, physics monotonicity.
+- `test_homogeneous_paper_env.py` — homogeneous `u6` topology/action/report-routing behavior and seed determinism.
+- `test_homogeneous_algorithms.py` — verifies MASAC/MATD3/MADDPG accept the `u6` five-dimensional action.
 - `test_common.py` — replay/network/soft target update.
 - `test_algorithms.py` — all three action/update/checkpoint flows.
 - `test_logging.py` — diagnostics/error logs and plots.

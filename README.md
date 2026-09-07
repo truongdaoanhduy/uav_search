@@ -3,8 +3,9 @@
 Baselines: `MASAC`, `MATD3`, `MADDPG`.
 
 Scenarios:
-- `f1_m5`: 1 fixed-wing + 5 multi-rotor UAVs
-- `f1_m9`: 1 fixed-wing + 9 multi-rotor UAVs
+- `f1_m5`: 1 fixed-wing + 5 multi-rotor UAVs (paper reproduction)
+- `f1_m9`: 1 fixed-wing + 9 multi-rotor UAVs (paper reproduction)
+- `u6`: 6 identical multi-rotor UAVs, peer-to-peer, no leader/follower (research adaptation)
 
 Paper-scenario fidelity and the remaining unpublished-parameter gaps are documented in [`docs/PAPER_FIDELITY.md`](docs/PAPER_FIDELITY.md). The environment matches the paper where values/equations are published, but it does not claim byte-for-byte reproduction of the authors' unpublished simulator.
 
@@ -15,6 +16,25 @@ git clone https://github.com/truongdaoanhduy/uav_search.git
 cd uav_search
 pip install -r requirements.txt
 ```
+
+
+## Homogeneous `u6` research scenario
+
+`u6` deliberately reuses the **root paper's lightweight MPE-style simulation** instead of adding a second network simulator. It keeps the 5 km × 5 km post-disaster world, uniformly randomized targets/buildings, circular obstacles, 50-step episodes, root-paper multi-rotor 2.5D motion/energy model, and the paper's A2A LoS/NLoS/SINR/rate equations. The research adaptation changes the architecture to six identical peer UAVs and extends each continuous action to:
+
+```text
+[force, direction, transmit_gate, transmit_amount, recipient]
+```
+
+Target confirmation creates a finite-buffer report; the selected UAV can forward that data one hop per RL step to another UAV or to an adapted ground command station. The report/GCS/buffer/delivery-reward values are explicitly marked `ADAPTED_ASSUMPTION` in `configs/scenarios/u6.yaml`, because the root paper does not publish them.
+
+Smoke train:
+
+```bash
+python scripts/train.py --algorithm masac --scenario u6 --episodes 10 --device cpu --local-only
+```
+
+The legacy `f1_m5`/`f1_m9` behavior is kept intact so paper reproduction and the homogeneous research scenario can be compared without mixing their provenance.
 
 ## Train CPU
 

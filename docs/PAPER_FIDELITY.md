@@ -162,3 +162,17 @@ The final audit against the uploaded IEEE paper identifies several points that m
 - **3D dynamics are approximated as 2.5D:** the paper defines 3D position/velocity dynamics, but does not publish the numerical constants/control details needed for exact integration. Fixed type-specific altitudes are retained as assumptions.
 
 These points are intentionally left visible instead of being silently filled with guessed values. Parameters for which the paper gives only a symbol/formula but no numerical value are preserved for later source/reference completion.
+
+## 8. Homogeneous `u6` research adaptation (not a paper reproduction)
+
+The repository also contains `configs/scenarios/u6.yaml`. This scenario intentionally uses the **same lightweight root-paper simulation implementation** while changing the research question:
+
+- six identical multi-rotor UAVs (`fixed_wing: 0`, `multirotor: 6`);
+- no fixed-wing leader and no leader/follower formation;
+- every UAV pair is a candidate A2A link and the existing paper Eq. (3)-(7) rate calculation determines usable connectivity;
+- the first two action components remain the root-paper multi-rotor `{F, theta}` motion action;
+- three added continuous components control `transmit/not`, transmission amount, and recipient UAV/GCS;
+- confirmed targets generate finite-buffer mission reports and forwarding is limited to one hop per RL step;
+- a ground command station, report size, buffer size, and report-delivery reward are **adapted assumptions**, because the root paper does not publish packet-buffer/GCS delivery semantics.
+
+Therefore `u6` should be described as **root-paper-simulator-based / root-paper-inspired**, not as a reproduction of the paper's heterogeneous leader-follower scenario. The legacy `f1_m5` and `f1_m9` paths remain unchanged for reproduction comparisons.
