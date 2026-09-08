@@ -29,7 +29,9 @@ uav_search/
 
 **`models.py`** — pure physical/model functions: A2A communication rate, multi-rotor power, circle collision. Kept separate so radio/energy models can later be replaced independently.
 
-**`paper_env.py`** — stateful root-paper MPE-style simulator: randomized scenario reset, fixed-wing/multi-rotor motion, target confirmation, link tracking, rewards, observations, episode metrics, and trajectory history. In `u6` mode the same simulator switches to six identical multi-rotors, all-pair peer links, finite report buffers, one-hop-per-step forwarding, and a GCS report sink.
+**`paper_env.py`** — stateful root-paper mission simulator: randomized scenario reset, fixed-wing/multi-rotor motion, target confirmation, rewards, observations, episode metrics, and trajectory history. In `u6` mode it switches to six identical peers, finite report buffers, one-hop-per-step forwarding, and a GCS report sink, while delegating networking to `network_backends.py`.
+
+**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the previous paper-equation peer channel for regression/ablation. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and uses its A2A path-gain model, `CsmaCa`, `Phy`, and `Channel`; MARL still owns transmit gating, byte amount, and next-hop selection.
 
 ## `src/uav_search/algorithms/`
 
@@ -63,6 +65,8 @@ uav_search/
 
 **`train.py`** — train one algorithm/scenario.
 
+**`install_uavnetsim.sh`** — installs SimPy plus pinned UavNetSim commit `04daafb815eb377409b40b285574eeb62b9a8d58` with `--no-deps`; the fast `a2a` integration does not require Sionna RT.
+
 **`run_all.py`** — run exactly the requested 3 algorithms × 2 scenarios.
 
 **`evaluate.py`** — multi-case checkpoint evaluation.
@@ -75,6 +79,7 @@ uav_search/
 - `test_env.py` — legacy paper simulator determinism, output contract, target confirmation, episode length, physics monotonicity.
 - `test_homogeneous_paper_env.py` — homogeneous `u6` topology/action/report-routing behavior and seed determinism.
 - `test_homogeneous_algorithms.py` — verifies MASAC/MATD3/MADDPG accept the `u6` five-dimensional action.
+- `test_network_backends.py` — analytical-regression tests plus optional real-UavNetSim A2A/CSMA transport tests.
 - `test_common.py` — replay/network/soft target update.
 - `test_algorithms.py` — all three action/update/checkpoint flows.
 - `test_logging.py` — diagnostics/error logs and plots.

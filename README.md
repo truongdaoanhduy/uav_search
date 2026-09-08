@@ -20,13 +20,23 @@ pip install -r requirements.txt
 
 ## Homogeneous `u6` research scenario
 
-`u6` deliberately reuses the **root paper's lightweight MPE-style simulation** instead of adding a second network simulator. It keeps the 5 km × 5 km post-disaster world, uniformly randomized targets/buildings, circular obstacles, 50-step episodes, root-paper multi-rotor 2.5D motion/energy model, and the paper's A2A LoS/NLoS/SINR/rate equations. The research adaptation changes the architecture to six identical peer UAVs and extends each continuous action to:
+`u6` uses the approved **hybrid option C**. `PaperUAVEnv` remains authoritative for the 5 km × 5 km post-disaster mission, randomized targets/buildings, circular obstacles, 50-step episodes, multi-rotor 2.5D motion, sensing, finite application buffers, and reward calculation. Networking is delegated to a pluggable backend. The default for `u6` is **UavNetSim**, pinned to commit `04daafb815eb377409b40b285574eeb62b9a8d58` (distribution version 2.0.0).
+
+The continuous action remains fixed at:
 
 ```text
 [force, direction, transmit_gate, transmit_amount, recipient]
 ```
 
-Target confirmation creates a finite-buffer report; the selected UAV can forward that data one hop per RL step to another UAV or to an adapted ground command station. The report/GCS/buffer/delivery-reward values are explicitly marked `ADAPTED_ASSUMPTION` in `configs/scenarios/u6.yaml`, because the root paper does not publish them.
+The MARL policy decides whether to transmit, how many bytes to attempt, and the immediate recipient/next hop. UavNetSim does **not** choose routing for this integration; its `CsmaCa`, `Phy`, and `Channel` components resolve contention, SINR/interference, transmission success, delay, PDR, throughput, and radio transmit energy. Data received by a relay cannot be forwarded again until the next MARL step.
+
+Install the pinned lightweight UavNetSim backend before running `u6`:
+
+```bash
+./scripts/install_uavnetsim.sh
+```
+
+The training path intentionally uses UavNetSim `CHANNEL_MODE=a2a`, which exercises UavNetSim's A2A PHY/channel and CSMA/CA without requiring the heavy Sionna RT scene worker on every MARL step. The original analytical paper-style peer channel remains available as `network_backend: analytical` for regression/ablation.
 
 Smoke train:
 
@@ -34,7 +44,7 @@ Smoke train:
 python scripts/train.py --algorithm masac --scenario u6 --episodes 10 --device cpu --local-only
 ```
 
-The legacy `f1_m5`/`f1_m9` behavior is kept intact so paper reproduction and the homogeneous research scenario can be compared without mixing their provenance.
+Target confirmation creates a finite-buffer report; mission delivery is counted only when target data reaches the GCS. `info` includes `network_attempted_bytes`, `network_delivered_bytes`, byte PDR, throughput, mean delay, PHY failures, and network transmit energy. The legacy `f1_m5`/`f1_m9` paths remain on the original paper simulator and are not switched to UavNetSim.
 
 ## Train CPU
 

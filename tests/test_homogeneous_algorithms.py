@@ -11,6 +11,7 @@ from uav_search.envs.paper_env import PaperUAVEnv
 @pytest.mark.parametrize("name", ["maddpg", "matd3", "masac"])
 def test_algorithms_support_homogeneous_u6_five_dimensional_action(name):
     cfg = deepcopy(load_config(name, "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
     cfg["runtime"]["batch_size"] = 4
     cfg["runtime"]["replay_size"] = 32
     cfg["runtime"]["hidden_sizes"] = [16, 16]

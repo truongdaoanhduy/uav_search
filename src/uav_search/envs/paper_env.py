@@ -7,6 +7,7 @@ import numpy as np
 from gymnasium.spaces import Box
 
 from .models import circle_collision, communication_rate_bps, multirotor_power_w, path_gain_linear
+from .network_backends import NetworkStepResult, TransmissionIntent, create_network_backend
 
 
 GCS_RECIPIENT = -1
@@ -55,6 +56,9 @@ class PaperUAVEnv:
             self.peer_delivery_reward = float(self.scenario.get("delivery_reward", 20.0))
             if self.peer_report_bytes <= 0 or self.peer_buffer_bytes <= 0:
                 raise ValueError("report_bytes and buffer_bytes must be positive")
+            self.network_backend = create_network_backend(
+                str(self.scenario.get("network_backend", "analytical")), self.cfg, seed=seed
+            )
         if self.n_fixed:
             # Formation membership is required by the paper's star topology.  For the
             # one-leader experiments this is exact; for multiple leaders, a balanced
@@ -150,6 +154,10 @@ class PaperUAVEnv:
             self.last_bytes_transmitted = 0
             self.total_bytes_transmitted = 0
             self.reports_delivered = 0
+            self.last_network_result = NetworkStepResult()
+            self.total_network_attempted_bytes = 0
+            self.total_network_delivered_bytes = 0
+            self.total_network_tx_energy_j = 0.0
         self._refresh_links()
         return self._observations(), self._info(step_energy_j=0.0, action_saturation=0.0)
 
@@ -235,6 +243,18 @@ class PaperUAVEnv:
         )
 
     def _refresh_links(self) -> None:
+        if self.peer_mode:
+            snapshot = self.network_backend.link_snapshot(
+                self.positions, self.gcs_position, getattr(self, "obstacles", None)
+            )
+            self.last_pair_rates_bps[:] = snapshot.pair_rates_bps
+            self.last_gcs_rates_bps[:] = snapshot.gcs_rates_bps
+            self.last_adjacency[:] = snapshot.adjacency
+            for i in range(self.n_agents):
+                best_peer = float(np.max(self.last_pair_rates_bps[:, i])) if self.n_agents > 1 else 0.0
+                self.last_rates_bps[i] = max(best_peer, float(self.last_gcs_rates_bps[i]))
+            return
+
         candidate = self._candidate_links()
         self.last_pair_rates_bps.fill(0.0)
         self.last_adjacency.fill(0)
@@ -386,10 +406,11 @@ class PaperUAVEnv:
         self.report_generated[target_idx] = True
 
     def _peer_transmit(self, act: np.ndarray) -> None:
-        """Execute one-hop peer/GCS report transfers using the root-paper rate model.
+        """Execute one-hop report transfers through the configured network backend.
 
-        A frozen queue snapshot enforces simultaneous MARL semantics: bytes received
-        during this joint action become eligible only at the next environment step.
+        The MARL action remains authoritative for tx gating, byte budget and the
+        immediate recipient.  A frozen application-buffer snapshot prevents bytes
+        received in this macro-step from being forwarded again until the next step.
         """
         self.last_selected_tx_rate_bps.fill(0.0)
         self.last_selected_tx_distance_m.fill(np.inf)
@@ -400,17 +421,21 @@ class PaperUAVEnv:
 
         slot_start = self.report_buffers.copy()
         rmin = float(self.paper["min_comm_rate_bps"])
+        intents: list[TransmissionIntent] = []
         for sender in range(self.n_agents):
-            if act[sender, 2] <= 0.0 or int(slot_start[:, sender].sum()) <= 0:
+            queued_at_start = int(slot_start[:, sender].sum())
+            if act[sender, 2] <= 0.0 or queued_at_start <= 0:
                 continue
             self.last_tx_active[sender] = True
             recipient = self._decode_peer_recipient(sender, float(act[sender, 4]))
             if recipient == GCS_RECIPIENT:
                 rate = float(self.last_gcs_rates_bps[sender])
                 distance_m = float(np.linalg.norm(self.positions[sender] - self.gcs_position))
+                receiver_room = queued_at_start
             else:
                 rate = float(self.last_pair_rates_bps[recipient, sender])
                 distance_m = float(np.linalg.norm(self.positions[sender] - self.positions[recipient]))
+                receiver_room = max(0, self.peer_buffer_bytes - int(self.queue_bytes[recipient]))
             self.last_selected_tx_rate_bps[sender] = rate
             self.last_selected_tx_distance_m[sender] = distance_m
             if rate <= rmin:
@@ -419,14 +444,33 @@ class PaperUAVEnv:
             fraction = float(np.clip((act[sender, 3] + 1.0) * 0.5, 0.0, 1.0))
             budget = min(
                 int(rate * self.dt / 8.0 * fraction),
-                int(slot_start[:, sender].sum()),
+                queued_at_start,
+                receiver_room,
             )
-            if budget <= 0:
-                continue
-            self.last_tx_success[sender] = True
+            if budget > 0:
+                intents.append(TransmissionIntent(sender=sender, recipient=recipient, requested_bytes=budget))
 
+        self.last_network_result = self.network_backend.transmit(
+            intents,
+            self.positions,
+            self.gcs_position,
+            self.obstacles,
+            dt_s=self.dt,
+            step_index=self.step_count,
+        )
+        self.total_network_attempted_bytes += int(self.last_network_result.attempted_bytes)
+        self.total_network_delivered_bytes += int(self.last_network_result.delivered_bytes)
+        self.total_network_tx_energy_j += float(self.last_network_result.tx_energy_j)
+
+        for outcome in self.last_network_result.outcomes:
+            sender = int(outcome.sender)
+            recipient = int(outcome.recipient)
+            self.last_selected_tx_rate_bps[sender] = float(outcome.rate_bps)
+            self.last_selected_tx_distance_m[sender] = float(outcome.distance_m)
+            self.last_tx_success[sender] = bool(outcome.success)
+            remaining = max(0, int(outcome.delivered_bytes))
             for target_idx in range(self.n_targets):
-                if budget <= 0:
+                if remaining <= 0:
                     break
                 eligible = min(
                     int(slot_start[target_idx, sender]),
@@ -434,7 +478,7 @@ class PaperUAVEnv:
                 )
                 if eligible <= 0:
                     continue
-                nbytes = min(eligible, budget)
+                nbytes = min(eligible, remaining)
                 if recipient != GCS_RECIPIENT:
                     room = max(0, self.peer_buffer_bytes - int(self.queue_bytes[recipient]))
                     nbytes = min(nbytes, room)
@@ -453,7 +497,7 @@ class PaperUAVEnv:
                 else:
                     self.report_buffers[target_idx, recipient] += nbytes
                     self.queue_bytes[recipient] += nbytes
-                budget -= nbytes
+                remaining -= nbytes
                 self.last_bytes_transmitted += nbytes
 
         self.total_bytes_transmitted += int(self.last_bytes_transmitted)
@@ -696,4 +740,15 @@ class PaperUAVEnv:
                 float(self.reports_delivered / self.n_targets) if self.peer_mode and self.n_targets else 0.0
             ),
             "queue_bytes_total": int(self.queue_bytes.sum()) if self.peer_mode else 0,
+            "network_backend": self.network_backend.name if self.peer_mode else "paper_analytical",
+            "network_attempted_bytes": int(self.last_network_result.attempted_bytes) if self.peer_mode else 0,
+            "network_delivered_bytes": int(self.last_network_result.delivered_bytes) if self.peer_mode else 0,
+            "network_byte_pdr": float(self.last_network_result.byte_pdr) if self.peer_mode else 0.0,
+            "network_throughput_bps": float(self.last_network_result.throughput_bps) if self.peer_mode else 0.0,
+            "network_mean_delay_s": float(self.last_network_result.mean_delay_s) if self.peer_mode else 0.0,
+            "network_phy_failures": int(self.last_network_result.phy_failures) if self.peer_mode else 0,
+            "network_tx_energy_j": float(self.last_network_result.tx_energy_j) if self.peer_mode else 0.0,
+            "total_network_attempted_bytes": int(self.total_network_attempted_bytes) if self.peer_mode else 0,
+            "total_network_delivered_bytes": int(self.total_network_delivered_bytes) if self.peer_mode else 0,
+            "total_network_tx_energy_j": float(self.total_network_tx_energy_j) if self.peer_mode else 0.0,
         }

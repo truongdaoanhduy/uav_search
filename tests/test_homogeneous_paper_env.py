@@ -5,7 +5,10 @@ from uav_search.envs.paper_env import PaperUAVEnv, GCS_RECIPIENT
 
 
 def make_env(seed=44):
-    return PaperUAVEnv(load_config("masac", "u6"), seed=seed)
+    cfg = load_config("masac", "u6")
+    # Regression tests for the pre-UavNetSim peer behavior use the analytical backend.
+    cfg["scenario"]["network_backend"] = "analytical"
+    return PaperUAVEnv(cfg, seed=seed)
 
 
 def idle_actions(env):
@@ -142,6 +145,7 @@ def test_u6_config_is_available_without_changing_legacy_paper_scenarios():
 
 def test_report_is_not_partially_created_when_buffer_cannot_hold_it():
     cfg = load_config("masac", "u6")
+    cfg["scenario"]["network_backend"] = "analytical"
     cfg["scenario"]["buffer_bytes"] = 500_000
     cfg["scenario"]["report_bytes"] = 1_000_000
     env = PaperUAVEnv(cfg, seed=8)
@@ -164,3 +168,49 @@ def test_zero_tx_amount_cannot_farm_positive_communication_reward():
 
     assert info["bytes_transmitted"] == 0
     assert info["reward_components_sum"]["communication"] == 0.0
+
+
+def test_u6_defaults_to_uavnetsim_backend():
+    cfg = load_config("masac", "u6")
+    assert cfg["scenario"]["network_backend"] == "uavnetsim"
+
+
+def test_peer_env_uses_configured_network_backend_and_exposes_network_metrics():
+    cfg = load_config("masac", "u6")
+    cfg["scenario"]["network_backend"] = "analytical"
+    env = PaperUAVEnv(cfg, seed=44)
+    _, info = env.reset(seed=44)
+    assert env.network_backend.name == "analytical"
+    assert info["network_backend"] == "analytical"
+    assert info["network_attempted_bytes"] == 0
+    assert info["network_delivered_bytes"] == 0
+    assert info["network_byte_pdr"] == 0.0
+    assert info["network_throughput_bps"] == 0.0
+    assert info["network_mean_delay_s"] == 0.0
+    assert info["network_phy_failures"] == 0
+    assert info["network_tx_energy_j"] == 0.0
+
+
+def test_peer_transmission_metrics_come_from_configured_backend():
+    env = make_env(seed=17)
+    env.reset(seed=17)
+    env.positions[:, :2] = np.array(
+        [[2500, 2500], [2600, 2500], [4700, 4700], [4800, 4700], [4700, 4800], [4800, 4800]],
+        dtype=float,
+    )
+    env.gcs_position = np.array([2500.0, 2500.0, 0.0])
+    env.obstacles[:, :2] = [4900.0, 4900.0]
+    env.obstacles[:, 2] = 10.0
+    env._refresh_links()
+    env._enqueue_report(0, 0)
+    actions = idle_actions(env)
+    actions["uav_0"] = np.array([-1.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32)
+
+    _, _, _, _, info = env.step(actions)
+
+    assert info["network_backend"] == "analytical"
+    assert info["network_attempted_bytes"] > 0
+    assert info["network_delivered_bytes"] > 0
+    assert info["network_byte_pdr"] > 0.0
+    assert info["network_throughput_bps"] > 0.0
+    assert info["network_tx_energy_j"] > 0.0

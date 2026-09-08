@@ -5,6 +5,19 @@ scenario:
   fixed_wing: 0
   multirotor: 6
   num_uavs: 6
+  # Hybrid option C: mission/mobility stay in PaperUAVEnv; UavNetSim owns peer MAC/PHY.
+  network_backend: uavnetsim
+  network_backend_provenance: RESEARCH_DESIGN
+  uavnetsim_channel_mode: a2a
+  uavnetsim_channel_mode_provenance: UAVNETSIM_EXPLICIT
+  uavnetsim_bit_rate_bps: 2000000
+  uavnetsim_bit_rate_provenance: UAVNETSIM_DEFAULT_80211B
+  uavnetsim_tx_power_w: 5.0
+  uavnetsim_tx_power_provenance: PAPER_EXPLICIT_P_COM_ADAPTATION
+  uavnetsim_sinr_threshold_db: 6.0
+  uavnetsim_sinr_threshold_provenance: UAVNETSIM_DEFAULT_80211B
+  uavnetsim_los_model: free_space
+  uavnetsim_nlos_model: urban
   targets: 10
   targets_provenance: PAPER_INFERRED
   obstacles: 6
