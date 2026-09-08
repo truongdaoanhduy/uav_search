@@ -20,7 +20,7 @@ pip install -r requirements.txt
 
 ## Homogeneous `u6` research scenario
 
-`u6` uses the approved **hybrid option C**. `PaperUAVEnv` remains authoritative for the 5 km × 5 km post-disaster mission, randomized targets/buildings, circular obstacles, 50-step episodes, multi-rotor 2.5D motion, sensing, finite application buffers, and reward calculation. Networking is delegated to a pluggable backend. The default for `u6` is **UavNetSim**, pinned to commit `04daafb815eb377409b40b285574eeb62b9a8d58` (distribution version 2.0.0).
+`u6` uses the approved **hybrid option C**. `PaperUAVEnv` remains authoritative for the 5 km × 5 km post-disaster mission, six homogeneous multi-rotor UAVs, 2.5D motion, sensing, local target knowledge, finite report buffers/TTL, and reward calculation. Unlike the 50-step paper-reproduction scenarios, `u6` is a research adaptation with a 600-step horizon, an edge GCS, launch-zone initialization and an explicit 1.2 km contact limit (a calibrated research parameter, not a root-paper value). Networking is delegated to a pluggable backend. The default for `u6` is **UavNetSim**, pinned to commit `04daafb815eb377409b40b285574eeb62b9a8d58` (distribution version 2.0.0).
 
 The continuous action remains fixed at:
 
@@ -28,7 +28,9 @@ The continuous action remains fixed at:
 [force, direction, transmit_gate, transmit_amount, recipient]
 ```
 
-The MARL policy decides whether to transmit, how many bytes to attempt, and the immediate recipient/next hop. UavNetSim does **not** choose routing for this integration; its `CsmaCa`, `Phy`, and `Channel` components resolve contention, SINR/interference, transmission success, delay, PDR, throughput, and radio transmit energy. Data received by a relay cannot be forwarded again until the next MARL step.
+The MARL policy decides whether to transmit, how many bytes to attempt, and the immediate recipient/next hop. UavNetSim does **not** overwrite that learned next hop in this adapter; its `CsmaCa`, PHY/channel path and packet events resolve contact/MAC/PHY delivery outcomes, contention/interference, delay, PDR, throughput, and radio transmit energy. Data received by a relay cannot be forwarded again until the next MARL step. Actor peer slots expose only live one-hop or stale cached neighbor state; the centralized critics may train from the joint collection of decentralized observations.
+
+The current integration intentionally keeps application-level TargetReport queues/TTL in `PaperUAVEnv` while invoking UavNetSim for each macro-step's network transport. It is therefore a UavNetSim-backed MAC/PHY transport integration, not a claim that UavNetSim's own persistent routing/transport queues remain alive across the complete RL episode.
 
 Install the pinned lightweight UavNetSim backend before running `u6`:
 
@@ -38,13 +40,19 @@ Install the pinned lightweight UavNetSim backend before running `u6`:
 
 The training path intentionally uses UavNetSim `CHANNEL_MODE=a2a`, which exercises UavNetSim's A2A PHY/channel and CSMA/CA without requiring the heavy Sionna RT scene worker on every MARL step. The original analytical paper-style peer channel remains available as `network_backend: analytical` for regression/ablation.
 
-Smoke train:
+Smoke train one baseline:
 
 ```bash
 python scripts/train.py --algorithm masac --scenario u6 --episodes 10 --device cpu --local-only
 ```
 
-Target confirmation creates a finite-buffer report; mission delivery is counted only when target data reaches the GCS. `info` includes `network_attempted_bytes`, `network_delivered_bytes`, byte PDR, throughput, mean delay, PHY failures, and network transmit energy. The legacy `f1_m5`/`f1_m9` paths remain on the original paper simulator and are not switched to UavNetSim.
+Run the requested three baselines on `u6` with one command:
+
+```bash
+python scripts/run_u6.py --episodes 10 --device auto --amp auto --seed 44 --local-only
+```
+
+Target detection and mission delivery are separate: detection creates (or queues creation of) a finite-buffer TargetReport, while mission delivery is counted only when report bytes reach the GCS. Reports have TTL, relay forwarding is limited to one application-level hop per RL macro-step, and `info` includes direct/multi-hop/disconnected-to-GCS counts, queue/expiry metrics, network byte PDR, throughput, mean delay, PHY failures, and network transmit energy. The legacy `f1_m5`/`f1_m9` paths remain on the original paper simulator and are not switched to UavNetSim.
 
 ## Train CPU
 

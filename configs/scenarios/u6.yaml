@@ -12,19 +12,38 @@ scenario:
   uavnetsim_channel_mode_provenance: UAVNETSIM_EXPLICIT
   uavnetsim_bit_rate_bps: 2000000
   uavnetsim_bit_rate_provenance: UAVNETSIM_DEFAULT_80211B
-  uavnetsim_tx_power_w: 5.0
-  uavnetsim_tx_power_provenance: PAPER_EXPLICIT_P_COM_ADAPTATION
+  # RF transmit power is deliberately separate from the root paper's P_com=5 W
+  # communication-energy term. UavNetSim upstream uses 0.1 W by default.
+  uavnetsim_tx_power_w: 0.1
+  uavnetsim_tx_power_provenance: UAVNETSIM_DEFAULT_RF_POWER
   uavnetsim_sinr_threshold_db: 6.0
   uavnetsim_sinr_threshold_provenance: UAVNETSIM_DEFAULT_80211B
   uavnetsim_los_model: free_space
   uavnetsim_nlos_model: urban
+  # Explicit contact graph used by the policy-selected next-hop adapter. This is
+  # a research parameter (not published by the root paper) and needs sensitivity analysis.
+  peer_contact_range_m: 2000.0
+  gcs_contact_range_m: 2000.0
+  contact_range_provenance: RESEARCH_DESIGN_CALIBRATION_REQUIRED
   targets: 10
   targets_provenance: PAPER_INFERRED
   obstacles: 6
   obstacles_provenance: ASSUMED
-  # The root paper has no explicit command-center coordinate because fixed-wing
-  # UAVs are the relay layer. The peer adaptation needs one report sink.
-  gcs_position_m: [2500.0, 2500.0, 0.0]
+  # Research mission duration: the paper-faithful scenarios remain at 50 steps.
+  # 600 x 1 s lets a 10 m/s multirotor traverse 6 km, enough to search a 5 km map
+  # and alter the network topology instead of being trapped near initialization.
+  episode_steps: 600
+  episode_steps_provenance: RESEARCH_DESIGN_JTFR_JUROR_INSPIRED
+  # Peer UAVs launch together from an emergency-response staging area rather
+  # than appearing independently at random locations across the disaster map.
+  initialization: launch_disk
+  launch_center_m: [250.0, 2500.0]
+  launch_radius_m: 250.0
+  initial_min_separation_m: 150.0
+  initialization_provenance: RESEARCH_DESIGN
+  # Fixed edge command vehicle: direct communication is useful near the staging
+  # side, while exploration farther into the map naturally needs relays/SCF.
+  gcs_position_m: [0.0, 2500.0, 0.0]
   gcs_position_provenance: ADAPTED_ASSUMPTION
   report_bytes: 1000000
   report_bytes_provenance: ADAPTED_ASSUMPTION
@@ -32,3 +51,11 @@ scenario:
   buffer_bytes_provenance: ADAPTED_ASSUMPTION
   delivery_reward: 20.0
   delivery_reward_provenance: ADAPTED_ASSUMPTION
+  report_ttl_steps: 300
+  report_ttl_provenance: RESEARCH_DESIGN_JUROR_INSPIRED
+  neighbor_cache_ttl_steps: 50
+  neighbor_cache_provenance: RESEARCH_DESIGN_JUROR_INSPIRED
+  # Long u6 horizons must not reuse the root paper's positive residual-battery
+  # reward every step; use a small explicit per-Joule cost instead.
+  energy_cost_per_j: 0.001
+  energy_cost_provenance: RESEARCH_DESIGN

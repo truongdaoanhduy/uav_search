@@ -29,9 +29,9 @@ uav_search/
 
 **`models.py`** — pure physical/model functions: A2A communication rate, multi-rotor power, circle collision. Kept separate so radio/energy models can later be replaced independently.
 
-**`paper_env.py`** — stateful root-paper mission simulator: randomized scenario reset, fixed-wing/multi-rotor motion, target confirmation, rewards, observations, episode metrics, and trajectory history. In `u6` mode it switches to six identical peers, finite report buffers, one-hop-per-step forwarding, and a GCS report sink, while delegating networking to `network_backends.py`.
+**`paper_env.py`** — stateful root-paper mission simulator: randomized scenario reset, fixed-wing/multi-rotor motion, target confirmation, rewards, observations, episode metrics, and trajectory history. In `u6` mode it switches to six identical peers, launch-zone deployment, local/stale Dec-POMDP peer observations, per-agent target knowledge, finite report buffers/TTL, one-hop-per-step forwarding, and direct/multi-hop/disconnected GCS diagnostics, while delegating transport outcomes to `network_backends.py`.
 
-**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the previous paper-equation peer channel for regression/ablation. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and uses its A2A path-gain model, `CsmaCa`, `Phy`, and `Channel`; MARL still owns transmit gating, byte amount, and next-hop selection.
+**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the previous paper-equation peer channel for regression/ablation while honoring `u6` contact caps. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and uses its A2A path-gain model, `CsmaCa`, packet events and `Channel`; the backend, not `PaperUAVEnv`, accepts/rejects selected links. MARL still owns transmit gating, requested byte amount, and immediate next-hop selection.
 
 ## `src/uav_search/algorithms/`
 
@@ -67,7 +67,9 @@ uav_search/
 
 **`install_uavnetsim.sh`** — installs SimPy plus pinned UavNetSim commit `04daafb815eb377409b40b285574eeb62b9a8d58` with `--no-deps`; the fast `a2a` integration does not require Sionna RT.
 
-**`run_all.py`** — run exactly the requested 3 algorithms × 2 scenarios.
+**`run_all.py`** — run exactly the requested 3 algorithms across the current paper-reproduction scenario set.
+
+**`run_u6.py`** — run MASAC, MATD3 and MADDPG sequentially on the homogeneous `u6` joint search/networking scenario; default deterministic seed is 44.
 
 **`evaluate.py`** — multi-case checkpoint evaluation.
 

@@ -31,6 +31,15 @@ class MATD3(MADDPG):
         self.policy_noise = float(cfg["algorithm"]["policy_noise"])
         self.noise_clip = float(cfg["algorithm"]["noise_clip"])
         self.policy_delay = int(cfg["algorithm"]["policy_delay"])
+        # u6 uses a fixed Box action for all three baselines, but tx_gate and
+        # recipient have threshold/bin semantics. TD3 smoothing should perturb
+        # only locally continuous coordinates.
+        mask = [1.0] * self.action_dim
+        if bool(getattr(env, "peer_mode", False)) and self.action_dim == 5:
+            mask = [1.0, 1.0, 0.0, 1.0, 0.0]
+        self.target_smoothing_mask = torch.as_tensor(
+            mask, dtype=torch.float32, device=self.device
+        ).view(1, 1, self.action_dim)
 
     @property
     def critics1(self):
@@ -52,6 +61,7 @@ class MATD3(MADDPG):
         with torch.no_grad(), self.autocast():
             na = self._actions_tensor(b.next_obs, target=True)
             noise = torch.randn_like(na).mul_(self.policy_noise).clamp_(-self.noise_clip, self.noise_clip)
+            noise = noise * self.target_smoothing_mask
             na = (na + noise).clamp(-1.0, 1.0).flatten(start_dim=1)
             targets = []
             for i in range(self.n_agents):

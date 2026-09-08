@@ -71,6 +71,16 @@ def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUA
         "avg_battery_pct": float(info.get("avg_battery_pct", 100.0)),
         "mean_comm_rate_mbps": float(np.mean(comm_rates)) if comm_rates else 0.0,
         "action_saturation": float(np.mean(saturations)) if saturations else 0.0,
+        "mission_delivery_rate": float(info.get("mission_delivery_rate", 0.0)),
+        "reports_delivered": int(info.get("reports_delivered", 0)),
+        "expired_reports": int(info.get("expired_reports", 0)),
+        "queue_bytes_total": int(info.get("queue_bytes_total", 0)),
+        "network_byte_pdr": float(info.get("network_byte_pdr", 0.0)),
+        "network_throughput_bps": float(info.get("network_throughput_bps", 0.0)),
+        "direct_gcs_uavs": int(info.get("direct_gcs_uavs", 0)),
+        "multihop_gcs_uavs": int(info.get("multihop_gcs_uavs", 0)),
+        "disconnected_gcs_uavs": int(info.get("disconnected_gcs_uavs", 0)),
+        "mean_gcs_hops": float(info.get("mean_gcs_hops", 0.0)),
     }
     return env, metrics
 
@@ -246,6 +256,16 @@ def train_experiment(
                 "avg_battery_pct": float(last_info.get("avg_battery_pct", 100.0)),
                 "action_saturation": float(np.mean(saturations)) if saturations else 0.0,
                 "mean_comm_rate_mbps": float(np.mean(comm_rates)) if comm_rates else 0.0,
+                "mission_delivery_rate": float(last_info.get("mission_delivery_rate", 0.0)),
+                "reports_delivered": int(last_info.get("reports_delivered", 0)),
+                "expired_reports": int(last_info.get("expired_reports", 0)),
+                "queue_bytes_total": int(last_info.get("queue_bytes_total", 0)),
+                "network_byte_pdr": float(last_info.get("network_byte_pdr", 0.0)),
+                "network_throughput_bps": float(last_info.get("network_throughput_bps", 0.0)),
+                "direct_gcs_uavs": int(last_info.get("direct_gcs_uavs", 0)),
+                "multihop_gcs_uavs": int(last_info.get("multihop_gcs_uavs", 0)),
+                "disconnected_gcs_uavs": int(last_info.get("disconnected_gcs_uavs", 0)),
+                "mean_gcs_hops": float(last_info.get("mean_gcs_hops", 0.0)),
                 "critic_loss": float(latest_update.get("critic_loss", 0.0)),
                 "critic1_loss": float(latest_update.get("critic1_loss", 0.0)),
                 "critic2_loss": float(latest_update.get("critic2_loss", 0.0)),
@@ -321,6 +341,16 @@ def train_experiment(
                 "swarm/broken_link_uavs": ep_metrics["broken_link_uavs"],
                 "swarm/avg_comm_rate_mbps": ep_metrics["mean_comm_rate_mbps"],
                 "swarm/avg_broken_link_s": ep_metrics["mean_broken_link_s"],
+                "mission/delivery_rate": ep_metrics["mission_delivery_rate"],
+                "mission/reports_delivered": ep_metrics["reports_delivered"],
+                "mission/expired_reports": ep_metrics["expired_reports"],
+                "network/byte_pdr": ep_metrics["network_byte_pdr"],
+                "network/throughput_bps": ep_metrics["network_throughput_bps"],
+                "network/direct_gcs_uavs": ep_metrics["direct_gcs_uavs"],
+                "network/multihop_gcs_uavs": ep_metrics["multihop_gcs_uavs"],
+                "network/disconnected_gcs_uavs": ep_metrics["disconnected_gcs_uavs"],
+                "network/mean_gcs_hops": ep_metrics["mean_gcs_hops"],
+                "network/queue_bytes_total": ep_metrics["queue_bytes_total"],
                 "group/episode": episode,
                 "group/fixed_return_mean": ep_metrics["fixed_return_mean"],
                 "group/rotor_return_mean": ep_metrics["rotor_return_mean"],
@@ -347,7 +377,10 @@ def train_experiment(
             if should_report_episode(episode, total_episodes, int(progress_every)):
                 print(format_episode_progress(ep_metrics, total_episodes), flush=True)
 
-            score = ep_metrics["return_mean"] + 100.0 * ep_metrics["search_rate"]
+            mission_score = (
+                ep_metrics["mission_delivery_rate"] if env.peer_mode else ep_metrics["search_rate"]
+            )
+            score = ep_metrics["return_mean"] + 100.0 * mission_score
             if cfg["runtime"].get("save_best", True) and score > best_score:
                 best_score = score
                 algo.save(logger.checkpoint_dir / "best.pt")

@@ -66,6 +66,11 @@ class AnalyticalNetworkBackend:
         self.seed = int(seed)
         self.paper = cfg["paper"]
         self.assumed = cfg["assumed"]
+        self.scenario = cfg.get("scenario", {})
+
+    def _contact_range_m(self, *, gcs: bool = False) -> float:
+        key = "gcs_contact_range_m" if gcs else "peer_contact_range_m"
+        return float(self.scenario.get(key, float("inf")))
 
     def _tx_power_w(self) -> float:
         return float(
@@ -103,6 +108,9 @@ class AnalyticalNetworkBackend:
             for transmitter in range(n_agents):
                 if receiver == transmitter:
                     continue
+                distance = float(np.linalg.norm(positions[transmitter] - positions[receiver]))
+                if distance > self._contact_range_m(gcs=False):
+                    continue
                 interference = 0.0
                 for interferer in range(n_agents):
                     if interferer in (receiver, transmitter):
@@ -121,6 +129,9 @@ class AnalyticalNetworkBackend:
                     adjacency[receiver, transmitter] = 1
 
         for transmitter in range(n_agents):
+            if float(np.linalg.norm(positions[transmitter] - gcs_position)) > self._contact_range_m(gcs=True):
+                gcs_rates[transmitter] = 0.0
+                continue
             interference = sum(
                 self._received_power_w(gcs_position, positions[j])
                 for j in range(n_agents)
@@ -312,6 +323,10 @@ class UavNetSimBackend:
     def _setting(self, key: str, default: Any) -> Any:
         return self.scenario.get(key, default)
 
+    def _contact_range_m(self, *, gcs: bool = False) -> float:
+        key = "gcs_contact_range_m" if gcs else "peer_contact_range_m"
+        return float(self._setting(key, float("inf")))
+
     def _radio_parameters(self) -> dict[str, float | str]:
         ref = self.cfg.get("reference_backed", {})
         ucfg = self._modules["config"]
@@ -389,12 +404,15 @@ class UavNetSimBackend:
             for transmitter in range(n_agents):
                 if receiver == transmitter:
                     continue
+                if float(np.linalg.norm(positions[transmitter] - positions[receiver])) > self._contact_range_m(gcs=False):
+                    continue
                 rate = self._rate(positions[transmitter], positions[receiver], airspace)
                 pair_rates[receiver, transmitter] = rate
                 if rate > rmin:
                     adjacency[receiver, transmitter] = 1
         for transmitter in range(n_agents):
-            gcs_rates[transmitter] = self._rate(positions[transmitter], gcs_position, airspace)
+            if float(np.linalg.norm(positions[transmitter] - gcs_position)) <= self._contact_range_m(gcs=True):
+                gcs_rates[transmitter] = self._rate(positions[transmitter], gcs_position, airspace)
         return NetworkLinkSnapshot(pair_rates, gcs_rates, adjacency)
 
     def transmit(
@@ -421,6 +439,48 @@ class UavNetSimBackend:
         n_agents = int(len(positions))
         gcs_id = n_agents
         all_positions = np.vstack([positions, gcs_position])
+        snapshot = self.link_snapshot(positions, gcs_position, obstacles)
+        valid_intents: list[TransmissionIntent] = []
+        prefailed: list[TransmissionOutcome] = []
+        for intent in intents:
+            sender = int(intent.sender)
+            recipient = int(intent.recipient)
+            if sender < 0 or sender >= n_agents:
+                continue
+            if recipient == GCS_NODE:
+                rate = float(snapshot.gcs_rates_bps[sender])
+                distance = float(np.linalg.norm(positions[sender] - gcs_position))
+            elif 0 <= recipient < n_agents and recipient != sender:
+                rate = float(snapshot.pair_rates_bps[recipient, sender])
+                distance = float(np.linalg.norm(positions[sender] - positions[recipient]))
+            else:
+                rate = 0.0
+                distance = 0.0
+            if rate <= 0.0:
+                prefailed.append(TransmissionOutcome(
+                    sender=sender,
+                    recipient=recipient,
+                    requested_bytes=int(intent.requested_bytes),
+                    delivered_bytes=0,
+                    rate_bps=0.0,
+                    distance_m=distance,
+                    delay_s=0.0,
+                    tx_energy_j=0.0,
+                ))
+            else:
+                valid_intents.append(intent)
+
+        if not valid_intents:
+            return NetworkStepResult(
+                outcomes=prefailed,
+                attempted_bytes=attempted,
+                delivered_bytes=0,
+                byte_pdr=0.0,
+                throughput_bps=0.0,
+                mean_delay_s=0.0,
+                phy_failures=len(prefailed),
+                tx_energy_j=0.0,
+            )
 
         env = simpy.Environment()
         event_bus = _CaptureEventBus()
@@ -453,7 +513,7 @@ class UavNetSimBackend:
             usable_tx_us = max(0.0, slot_us - float(ucfg.DIFS_DURATION) - max_backoff_us - 1.0)
             max_payload_bits = max(0, int(float(ucfg.BIT_RATE) * usable_tx_us / 1e6) - header_bits)
 
-            for sequence, intent in enumerate(intents, start=1):
+            for sequence, intent in enumerate(valid_intents, start=1):
                 sender = int(intent.sender)
                 recipient = gcs_id if int(intent.recipient) == GCS_NODE else int(intent.recipient)
                 if sender < 0 or sender >= n_agents or recipient < 0 or recipient > gcs_id or sender == recipient:
@@ -495,8 +555,7 @@ class UavNetSimBackend:
                 for event_type, time_us, data in event_bus.events
                 if event_type == "packet_rx_succeeded" and int(data.get("packet_id", -1)) in packets
             }
-            snapshot = self.link_snapshot(positions, gcs_position, obstacles)
-            outcomes: list[TransmissionOutcome] = []
+            outcomes: list[TransmissionOutcome] = list(prefailed)
             delays: list[float] = []
             delivered_total = 0
             energy_total = 0.0
@@ -538,7 +597,7 @@ class UavNetSimBackend:
             byte_pdr=float(delivered_total / attempted) if attempted else 0.0,
             throughput_bps=float(delivered_total * 8.0 / dt_s),
             mean_delay_s=float(np.mean(delays)) if delays else 0.0,
-            phy_failures=int(metrics.phy_failures),
+            phy_failures=int(metrics.phy_failures) + len(prefailed),
             tx_energy_j=float(energy_total),
         )
 

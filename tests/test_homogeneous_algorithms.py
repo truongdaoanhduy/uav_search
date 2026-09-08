@@ -38,3 +38,16 @@ def test_algorithms_support_homogeneous_u6_five_dimensional_action(name):
         metrics = algo.update()
     assert metrics
     assert all(np.isfinite(v) for k, v in metrics.items() if isinstance(v, (int, float)))
+
+
+
+def test_u6_matd3_target_smoothing_does_not_perturb_gate_or_recipient():
+    cfg = deepcopy(load_config("matd3", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    cfg["runtime"]["hidden_sizes"] = [16, 16]
+    env = PaperUAVEnv(cfg, seed=44)
+    algo = make_algorithm("matd3", env, cfg, device="cpu", seed=44)
+    np.testing.assert_array_equal(
+        algo.target_smoothing_mask.detach().cpu().numpy().reshape(-1),
+        np.asarray([1.0, 1.0, 0.0, 1.0, 0.0], dtype=np.float32),
+    )

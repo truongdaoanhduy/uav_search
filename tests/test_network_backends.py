@@ -140,3 +140,21 @@ def test_uavnetsim_full_slot_request_accounts_for_csma_and_header_overhead():
     assert result.attempted_bytes == 250_000
     assert 0 < result.delivered_bytes <= 250_000
     assert 0.0 < result.byte_pdr <= 1.0
+
+
+
+def test_u6_contact_range_caps_analytical_peer_and_gcs_links():
+    cfg = load_config("masac", "u6")
+    backend = create_network_backend("analytical", cfg, seed=44)
+    positions = np.array(
+        [[100.0, 100.0, 60.0], [2300.0, 100.0, 60.0], [3000.0, 3000.0, 60.0],
+         [3200.0, 3200.0, 60.0], [3400.0, 3400.0, 60.0], [3600.0, 3600.0, 60.0]],
+        dtype=float,
+    )
+    gcs = np.array([0.0, 100.0, 0.0], dtype=float)
+    snapshot = backend.link_snapshot(positions, gcs, np.empty((0, 3), dtype=float))
+    assert np.linalg.norm(positions[1] - positions[0]) > cfg["scenario"]["peer_contact_range_m"]
+    assert snapshot.pair_rates_bps[1, 0] == 0.0
+    assert snapshot.adjacency[1, 0] == 0
+    assert snapshot.gcs_rates_bps[0] > 0.0
+    assert snapshot.gcs_rates_bps[1] == 0.0
