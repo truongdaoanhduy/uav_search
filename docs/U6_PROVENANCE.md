@@ -26,10 +26,11 @@
 | Safe distance | 141.4 m | Literature-backed baseline | Liu et al. 2024, simulation parameter `d_safe=141.4 m`. |
 | 3D continuous acceleration precedent | x/y/z acceleration | Literature-backed concept | GLIDE, Information 15 (2024) 477 uses continuous acceleration in all three axes and all UAVs starting from a base. The exact six-dimensional `u6` hybrid action is still an adaptation. |
 | Common-base deployment | yes | Literature-backed concept | GLIDE 2024 and homogeneous simultaneous search/routing literature both initialize all UAVs at a single base. Separate launch pads are a project safety adaptation. |
+| Number of ground targets | 10 | Literature-backed baseline | Ao et al. explicitly evaluate several 10-target post-disaster scenarios. Homogeneous six-UAV `u6` is still a new team composition. |
 | Ground station placement | edge of area | Literature-backed concept | Wheeb et al., Electronics 12 (2023) 1334 places the ground base station at the edge of a SAR search area and lets UAVs relay target reports toward it. The exact coordinate `[0,2500,0]` is adapted. |
 | Macro step | 1 s | Literature-backed baseline | Buffer-aided multi-UAV relay literature uses 1 s trajectory slots; `u6` makes this scenario-specific so root-paper scenarios are unchanged. |
 | Development horizon | 600 s = 600 x 1 s | Literature-backed baseline + calibration required | Wheeb et al. 2023 uses 600 s in a UAV SAR FANET study. Map/team differences mean sensitivity analysis is still required. |
-| Local candidate communication radius | 2 km | Literature-backed baseline + calibration required | *Energy–Information–Decision Coupling Optimization for Cooperative Operations of Heterogeneous Maritime Unmanned Systems*, Drones 10 (2026) 234 reports approximately 2 km WLAN radius. `u6` treats it as a fixed candidate radius, not a universal optimum. |
+| Local candidate communication radius | 2 km | Literature-backed + scenario-calibrated baseline | *Energy–Information–Decision Coupling Optimization for Cooperative Operations of Heterogeneous Maritime Unmanned Systems*, Drones 10 (2026) 234 reports approximately 2 km WLAN radius. A 50-seed × 600 s full-3D `u6` sweep then retained 2 km because it produced a useful direct/multi-hop/disconnected mixture. |
 | RF power range | 0.1--0.4 W | Literature-backed baseline | Cao et al., *Joint Trajectory and Communication Design for Buffer-Aided Multi-UAV Relaying Networks*, Applied Sciences 9 (2019) 5524 uses 0.1 W source/initial UAV power and 0.4 W maximum UAV power. |
 | UavNetSim default RF power | 0.1 W | UavNetSim native | Pinned UavNetSim `TRANSMITTING_POWER`. |
 | UavNetSim data rate | 2 Mbps | UavNetSim native | Pinned UavNetSim 802.11b configuration. |
@@ -38,9 +39,24 @@
 | Target report size | 1 MB | Literature-backed baseline | Du et al., IEEE OJCS 2 (2021), UAV-assisted VDTN message size 500 KB--1 MB. |
 | Report TTL | 300 s | Literature-backed baseline | Du et al. 2021 explicitly uses message TTL 300 s. |
 | UAV application buffer | 100 MB | Literature-backed baseline | Du et al. 2021 explicitly gives UAV buffer size 100 MB in the isolated-area UAV scenario. |
-| Battery capacity | 77 Wh = 277.2 kJ | Literature-backed hardware baseline | Mavic 3 Enterprise value reported in *Energy-Aware Multilingual Vision–Language Models for Drone Smart Sensing*, Drones 10 (2026) 361. This is a hardware reference, not a root-paper constant. |
+| Battery capacity | 77 Wh = 277.2 kJ | Literature-backed hardware baseline + scenario calibration | Mavic 3 Enterprise value reported in *Energy-Aware Multilingual Vision–Language Models for Drone Smart Sensing*, Drones 10 (2026) 361. In 50 aggressive 3D no-TX episodes of 600 s, mean final swarm battery was 72.68% and no UAV depleted. This is a hardware reference, not a root-paper constant. |
 | Neighbor-cache freshness | 5 s | Research adaptation from UavNetSim native behavior | The pinned UavNetSim virtual-force neighbor table uses a 5 s entry lifetime. `u6` mirrors that lifetime in its actor-visible cache; it does not use UavNetSim's table object directly. |
 | Movement + next-hop + transmit-power joint control | yes | Literature-backed concept | MRMG, arXiv:2606.06954, jointly learns UAV movement, next-hop selection and transmit-power control. The exact continuous encoding in `u6` is not copied from MRMG. |
+
+## `u6` calibration evidence after the 3D rewrite
+
+The literature values above are not treated as automatically optimal. The final full-3D non-learning topology sweep used real persistent UavNetSim, 50 deterministic seeds per radius and 600 s per seed:
+
+| Fixed candidate radius | Direct node-steps | Multi-hop node-steps | Disconnected node-steps | Mean GCS hops | Mean neighbor degree |
+|---:|---:|---:|---:|---:|---:|
+| 1.0 km | 26.2% | 5.1% | 68.6% | 1.20 | 1.97 |
+| 1.5 km | 37.1% | 11.3% | 51.6% | 1.33 | 2.60 |
+| **2.0 km** | **49.3%** | **21.3%** | **29.4%** | **1.41** | **3.11** |
+| 2.5 km | 61.6% | 25.7% | 12.7% | 1.37 | 3.43 |
+
+The 2 km baseline is retained because all three networking states remain substantial rather than because the literature value is assumed to transfer unchanged. A separate 30-step smoke confirmed that the calibration policy actually changes altitude (maximum per-UAV change 83.25 m) while UavNetSim time advances exactly with the 1 s macro-steps.
+
+Battery calibration used 50 deterministic 600 s episodes with aggressive random 3D motion and TX disabled to isolate propulsion. With the 77 Wh baseline, mean final swarm battery was **72.68%**, the minimum observed UAV battery was **72.58%**, and **0/50 episodes** had a depleted UAV. This is materially more constraining than the previous 1 MJ placeholder, while not forcing battery death during every 10-minute mission. Radio traffic will add further energy usage and is evaluated separately.
 
 ## Deliberate research adaptations
 
@@ -53,7 +69,7 @@ These choices have related literature, but **no source was found that specifies 
 | 5-cell FOV geometry | center + four cardinal cells | Liu publishes FOV *size* 5 but does not textually specify this exact footprint. |
 | Combined action | `[horizontal_thrust, heading, vertical_accel, tx_gate, tx_power, recipient]` | 3D acceleration and movement/next-hop/power each have precedent, but no source uses this exact six-coordinate hybrid Box action. |
 | Vertical acceleration mapping | policy `[-1,1]` mapped to root-paper `a_max` | Reuses a published root constraint with a new control mapping. |
-| Common-base launch pads | six separated pads on a 300 m semicircle | Literature supports a common base; the pad geometry/radius is derived to avoid artificial initial collisions. |
+| Common-base launch pads | six separated pads on a 300 m semicircle | Literature supports a common base; the pad geometry/radius is derived to avoid artificial initial collisions. For six pads spanning -75°..+75° at 30° increments and a 141.4 m minimum separation, the adjacent-chord bound requires `R >= 141.4/(2 sin 15°) = 273.2 m`; 300 m adds a small geometry margin. |
 | Exact GCS coordinate | `[0,2500,0]` | Literature supports an edge base station, not this exact midpoint. |
 | Same 2 km radius for UAV-UAV and UAV-GCS candidate links | yes | A simple project baseline; must be checked by topology calibration. |
 | Static victim targets | yes | Retains the post-disaster root-task interpretation; Liu's 3D sensing paper uses moving targets. |
@@ -66,17 +82,40 @@ The following are intentionally **not promoted to paper-backed values**:
 
 | Parameter | Current value/design | Status |
 |---|---:|---|
-| Number of circular obstacles in `u6` | 6 | `RESEARCH_ASSUMPTION` |
+| Number of circular obstacles in `u6` | 6 | `RESEARCH_ASSUMPTION`; Ao et al. explicitly use circular building abstractions and use 10 obstacles in scaled physical validation, but do not publish six as the main-simulation count |
 | Obstacle radius distribution | 80--220 m from legacy assumed config | `RESEARCH_ASSUMPTION` for exact numerical distribution |
-| Obstacles as vertical no-fly columns | yes | `RESEARCH_ADAPTATION` |
+| Obstacles as vertical no-fly columns | yes | `RESEARCH_ADAPTATION`; the root paper uses 2-D circular buildings, while 3-D cylindrical obstacles are common in UAV RL literature |
 | Launch-pad radius | 300 m | `RESEARCH_DESIGN` derived safe geometry, not literature numeric value |
 | Delivery completion reward | 20 | `RESEARCH_DESIGN_CALIBRATION_REQUIRED` |
 | Per-joule reward cost | 0.001 | `RESEARCH_DESIGN_CALIBRATION_REQUIRED` |
 | Simplified propulsion coefficients (`P0`, blade/frame drag terms) | legacy assumed values | `RESEARCH_ASSUMPTION`; battery capacity is sourced, propulsion coefficients are not |
-| Exact 2 km suitability for this 5 km/6-UAV topology | not yet established | `RESEARCH_DESIGN_CALIBRATION_REQUIRED` despite literature precedent |
-| 600 s sufficiency for this task | not yet established | `RESEARCH_DESIGN_CALIBRATION_REQUIRED` despite SAR precedent |
+| Exact 2 km suitability beyond the tested 50-seed full-3D distribution | sensitivity should still be reported in experiments | `RESEARCH_DESIGN_CALIBRATED`; the 1/1.5/2/2.5 km sweep is retained as evidence |
+| 600 s sufficiency for learning/evaluation conclusions | topology calibration covers this horizon, but task-learning sensitivity remains advisable | literature-backed development horizon, not a root-paper constant |
 
 A citation to an unrelated scenario is not enough to make these values valid. They should be calibrated/swept, replaced by a more faithful subsystem model, or left visibly assumed.
+
+
+## Remaining assumptions: why they remain and defensible alternatives
+
+These are intentionally not silently replaced just because a related paper contains a number. Replacing them changes the research problem and therefore requires either a sensitivity study or an explicit subsystem change.
+
+| Current assumption | Why it is kept for now | Literature-backed alternatives | Recommended handling |
+|---|---|---|---|
+| 6 obstacles, radii 80--220 m | The 5 km root scenario states that buildings/targets are random and models buildings as circles, but does not publish this exact density/radius distribution. Changing density would invalidate the current topology/search calibration. | Ao et al. use 10 ground obstacles in scaled physical validation; other 3-D UAV RL studies use cylindrical obstacles but at scenario-specific radii. | Keep 6 for the current baseline; report an obstacle-density/radius sensitivity (`3/6/10`, small/medium/large radii) rather than claiming a paper-exact value. |
+| Vertical no-fly columns | A 2-D root-paper circle must be given 3-D semantics after the altitude rewrite. Infinite-height columns are conservative and prevent an agent from trivially overflying every hazard. | Full finite-height cylinders are used in 3-D UAV obstacle-avoidance literature; a height map/building mesh is another option. | Keep columns as the baseline abstraction; add finite-height cylinders as a later realism ablation if obstacle-overflight is part of the research question. |
+| Delivery reward = 20 | No uploaded paper uses this exact reward on the same combination of sensing + DTN + GCS delivery. It was retained to keep final delivery materially more valuable than intermediate information gain. | JUROR uses a strongly delivery-centric team reward (`alpha_d=4.0`) on its own reward scale; Ao et al. use a communication/search/energy/safety decomposition; Liu et al. use target:cognitive weights 1:0.1. | Do not copy `4.0` or another raw number across reward scales. Sweep delivery reward (e.g. 5/10/20/40) and report delivery-rate/search trade-offs. |
+| Energy cost = 0.001 per J | The root paper uses a positive residual-energy reward with `tau=0.2`, whereas `u6` has a 600-step DTN mission and an explicit Joule battery. Directly reusing that positive reward would reward simply staying alive every step. | Ao et al. `tau=0.2`; JCAS-MARL models battery/resource trade-offs; Zeng et al. provide a physical rotary-wing propulsion model. | Keep the explicit cost as a transparent baseline until a reward sweep. A stronger alternative is normalized energy fraction (`Delta E / E_cap`) with a separately calibrated weight. |
+| Simplified propulsion coefficients | The root paper's form is implemented but its numerical hover/blade/frame coefficients are not published. The sourced 77 Wh Mavic battery does not make those legacy coefficients hardware-faithful. | Zeng--Xu--Zhang derive the standard rotary-wing power model and publish a complete parameter set; however their reference aircraft is about 100 N and is not a Mavic 3. | Do **not** mix Zeng's 100-N aircraft power coefficients with a 77-Wh Mavic battery. Either keep the current abstract model and label it assumed, or switch the whole vehicle/energy subsystem to a single consistent Zeng-style reference platform and recalibrate battery/endurance. |
+| Exact GCS coordinate `[0,2500,0]` | Literature supports an edge ground station, not the exact midpoint. Mid-edge is symmetric and avoids favoring a corner. | Edge midpoint, edge corner, or outside-map command vehicle are all used in relay/SAR studies depending on the mission. | Keep midpoint for baseline; use GCS-placement sensitivity if infrastructure geometry becomes a claimed contribution. |
+| 300 m launch radius | No paper dictates 300 m. It is a deterministic geometry consequence of six same-base UAVs plus the sourced 141.4 m safety distance. | Same exact launch point (GLIDE-style), random launch disk, separate pads. | Keep 300 m because it prevents an artificial t=0 collision while preserving a common staging site; it is derived, not paper-explicit. |
+| 5-cell FOV footprint = center + N/S/E/W | Liu et al. publish FOV *size* 5 but the parsed text does not prescribe this exact footprint. | Cross footprint, square/diamond footprint, or continuous conic projection. | Keep the cross for a deterministic discrete-grid baseline; continuous cone geometry is the preferred future sensing-realism option. |
+| 6-D continuous hybrid action | No single paper uses exactly `[horizontal thrust, heading, vertical accel, TX gate, TX power, recipient]`. | MRMG uses movement + next-hop + power; maritime SAR uses communication gating; GLIDE gives continuous 3-D acceleration. | Keep the synthesis because it lets MASAC/MATD3/MADDPG share one interface; document it as a new adaptation and later compare with a hybrid/discrete actor if necessary. |
+| Same 2 km candidate radius for UAV-UAV and UAV-GCS | The 2 km value is literature-backed and calibrated, but equality of A2A/A2G ranges is a simplification. | Separate A2A/A2G propagation/radii; pure SINR/rate connectivity without a hard radius. | Keep equal radii for the first baseline because the 200-episode sweep is already calibrated; separate A2A/A2G is the strongest networking ablation. |
+| 600 s episode | It has SAR precedent and has been used for full-3D topology/battery calibration, but that does not prove learning conclusions are horizon-invariant. | 300/600/900/1200 s horizons or terminate when all reports are delivered. | Retain 600 s development baseline and include horizon sensitivity for final paper evaluation. |
+
+### Propulsion-model note
+
+Zeng, Xu and Zhang's rotary-wing model is a strong option when a physically self-consistent reference aircraft is desired. Their published example uses a 100 N aircraft, air density 1.225 kg/m^3, rotor radius 0.5 m, disc area 0.79 m^2, tip speed 200 m/s, rotor solidity 0.05, fuselage drag ratio 0.3, induced-power correction 0.1, hover induced velocity 7.2 m/s and profile drag coefficient 0.012. Those values should be adopted **as a complete reference-aircraft set**, not selectively mixed with the current Mavic 3 battery baseline.
 
 ## Primary references
 
@@ -92,3 +131,5 @@ A citation to an unrelated scenario is not enough to make these values valid. Th
 10. Z. Zhou et al., *UavNetSim-v1: A Python-based Simulation Platform for UAV Communication Networks*, arXiv:2507.09852 / ICCC 2025; official repository `Zihao-Felix-Zhou/UavNetSim`.
 11. Y. Yuan and S. Gao, *Learn to Access and Backhaul the Sky: Multi-Scale Radio Map Guided Multi-UAV Cooperation*, arXiv:2606.06954.
 12. *Energy-Aware Multilingual Vision–Language Models for Drone Smart Sensing*, Drones 10 (2026) 361.
+13. Y. Zeng, J. Xu and R. Zhang, *Energy Minimization for Wireless Communication with Rotary-Wing UAV*, IEEE Transactions on Wireless Communications 18(4), 2019.
+14. X. Wang and S.-R. Yang, *Joint UAV Flight and Opportunistic Routing under Reinforcement Learning for Delay-Tolerant Networks* (JUROR), 2026 preprint.

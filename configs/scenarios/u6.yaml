@@ -56,7 +56,7 @@ scenario:
   peer_contact_range_m: 2000.0
   gcs_contact_range_m: 2000.0
   contact_range_provenance: "LITERATURE_BACKED_BASELINE:ENERGY_INFORMATION_DECISION_2026_2KM_WLAN"
-  contact_range_calibration_status: RESEARCH_DESIGN_CALIBRATION_REQUIRED
+  contact_range_calibration_status: "RESEARCH_DESIGN_CALIBRATED:50_SEEDS_X_600S_FULL_3D"
   tx_power_min_w: 0.1
   tx_power_max_w: 0.4
   tx_power_reference_w: 0.1
@@ -67,9 +67,13 @@ scenario:
   network_packet_payload_provenance: UAVNETSIM_NATIVE
   network_packet_payload_literature_support: "LITERATURE_BACKED_BASELINE:FANET_1024B"
   targets: 10
-  targets_provenance: PAPER_INFERRED
+  targets_provenance: "LITERATURE_BACKED_BASELINE:AO_ROOT_10_TARGET_SCENARIOS"
   obstacles: 6
+  # The root paper explicitly models post-disaster buildings as 2-D circles, but does
+  # not publish six as the main simulation count. Six circles and their radii remain
+  # a scenario-density assumption; u6 extrudes them vertically as no-fly columns.
   obstacles_provenance: RESEARCH_ASSUMPTION
+  obstacle_shape_provenance: "RESEARCH_ADAPTATION:AO_ROOT_CIRCULAR_BUILDINGS_EXTRUDED_3D"
   # Buffer-aided multi-UAV relaying literature commonly discretizes flight into 1 s slots.
   dt_s: 1.0
   dt_provenance: "LITERATURE_BACKED_BASELINE:CAO_2022_BUFFER_AIDED_MULTI_UAV_RELAY_1S_SLOT"
@@ -112,6 +116,7 @@ scenario:
   # smart-sensing work reports a 77 Wh battery, i.e. 277.2 kJ.
   battery_capacity_j: 277200.0
   battery_capacity_provenance: "LITERATURE_BACKED_BASELINE:MAVIC3_ENTERPRISE_77WH"
+  battery_capacity_calibration_status: "CALIBRATED:50_SEEDS_X_600S_AGGRESSIVE_3D_NO_TX"
   # UavNetSim's native virtual-force neighbor table expires entries after 5 s.
   # With dt=1 s, five RL steps use the same freshness horizon.
   neighbor_cache_ttl_steps: 5
@@ -120,3 +125,4 @@ scenario:
   # reward every step; use a small explicit per-Joule cost instead.
   energy_cost_per_j: 0.001
   energy_cost_provenance: RESEARCH_DESIGN_CALIBRATION_REQUIRED
+  propulsion_model_provenance: "RESEARCH_ASSUMPTION:LEGACY_SIMPLIFIED_MODEL_UNPUBLISHED_COEFFICIENTS"
