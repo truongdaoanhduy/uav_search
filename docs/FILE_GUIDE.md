@@ -55,7 +55,7 @@ uav_search/
 
 **`train.py`** — experiment orchestration: seeds, env → policy → replay → update loop, best/final/crash checkpoint, episode/update metrics, post-training deterministic rollout, summary and plot generation.
 
-**`network_calibration.py`** — non-learning `u6` calibration runner. It drives deterministic-by-seed random-waypoint motion through the real UavNetSim backend and aggregates direct/multi-hop/disconnected node-step fractions, GCS hops, neighbor degree, and optional traffic metrics across seeds/ranges.
+**`network_calibration.py`** — non-learning `u6` calibration runner. It drives deterministic-by-seed **3D** random-waypoint motion (including altitude changes across the configured flight levels) through the real UavNetSim backend and aggregates direct/multi-hop/disconnected node-step fractions, GCS hops, neighbor degree, and optional traffic metrics across seeds/ranges.
 
 **`evaluate.py`** — reload a checkpoint and evaluate it over arbitrary random test cases.
 

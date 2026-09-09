@@ -33,7 +33,11 @@ def test_calibration_policy_emits_six_dimensional_u6_actions():
 
     assert set(actions) == set(env.agents)
     assert all(action.shape == (6,) for action in actions.values())
-    assert all(action[2] == pytest.approx(0.0) for action in actions.values())
+    # Full-3D topology calibration must exercise altitude rather than freezing
+    # every UAV at its seeded initial sensing level.
+    assert any(abs(float(action[2])) > 1e-6 for action in actions.values())
+    assert policy.waypoints.shape == (env.n_agents, 3)
+    assert all(env.peer_altitude_min_m <= z <= env.peer_altitude_max_m for z in policy.waypoints[:, 2])
 
 
 def test_calibration_episode_uses_real_uavnetsim_and_advances_full_macro_time():

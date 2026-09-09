@@ -29,7 +29,13 @@ class RandomWaypointCalibrationPolicy:
     def __init__(self, env: PaperUAVEnv, seed: int, tx_power_w: float, traffic: bool = False):
         self.rng = np.random.default_rng(int(seed))
         self.area = float(env.area_size_m)
-        self.waypoints = self.rng.uniform(0.05 * self.area, 0.95 * self.area, size=(env.n_agents, 2))
+        self.altitude_levels = np.asarray(env.peer_altitude_levels_m, dtype=np.float64)
+        self.waypoints = np.column_stack(
+            [
+                self.rng.uniform(0.05 * self.area, 0.95 * self.area, size=(env.n_agents, 2)),
+                self.rng.choice(self.altitude_levels, size=env.n_agents, replace=True),
+            ]
+        ).astype(np.float64)
         self.traffic = bool(traffic)
         self.tx_power_action = tx_power_to_action(
             tx_power_w,
@@ -45,18 +51,27 @@ class RandomWaypointCalibrationPolicy:
                     [-1.0, 0.0, 0.0, -1.0, self.tx_power_action, -1.0], dtype=np.float32
                 )
                 continue
-            delta = self.waypoints[idx] - env.positions[idx, :2]
-            if float(np.linalg.norm(delta)) < 150.0:
-                self.waypoints[idx] = self.rng.uniform(0.05 * self.area, 0.95 * self.area, size=2)
-                delta = self.waypoints[idx] - env.positions[idx, :2]
+            delta = self.waypoints[idx] - env.positions[idx]
+            if float(np.linalg.norm(delta[:2])) < 150.0 and abs(float(delta[2])) < 10.0:
+                self.waypoints[idx, :2] = self.rng.uniform(0.05 * self.area, 0.95 * self.area, size=2)
+                self.waypoints[idx, 2] = float(self.rng.choice(self.altitude_levels))
+                delta = self.waypoints[idx] - env.positions[idx]
             angle = math.atan2(float(delta[1]), float(delta[0]))
             direction_action = float(np.clip(angle / math.pi, -1.0, 1.0))
+            # Damp the z controller instead of using sign(delta_z), which would
+            # repeatedly slam a velocity-integrating UAV into altitude bounds.
+            vmax = float(env.paper["multirotor_speed_max_mps"])
+            amax = float(env.paper["max_accel_mps2"])
+            desired_vz = float(np.clip(delta[2] / max(5.0 * env.dt, 1e-9), -0.5 * vmax, 0.5 * vmax))
+            vertical_action = float(
+                np.clip((desired_vz - float(env.velocities[idx, 2])) / max(amax * env.dt, 1e-9), -1.0, 1.0)
+            )
             recipient_action = float(self.rng.uniform(-1.0, 1.0))
             actions[agent] = np.array(
                 [
                     1.0,
                     direction_action,
-                    0.0,  # topology calibration keeps the seeded initial altitude level
+                    vertical_action,
                     1.0 if self.traffic else -1.0,
                     self.tx_power_action,
                     recipient_action,
