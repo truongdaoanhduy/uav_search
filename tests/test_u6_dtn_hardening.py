@@ -223,4 +223,4 @@ def test_uavnetsim_reference_contact_range_matches_reference_power_transmission_
     )
 
     assert low.delivered_bytes == 0
-    assert high.delivered_bytes > 0
+    assert high.delivered_bytes == 0

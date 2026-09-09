@@ -41,7 +41,9 @@ class RandomWaypointCalibrationPolicy:
         actions: dict[str, np.ndarray] = {}
         for idx, agent in enumerate(env.agents):
             if not bool(env.uav_active[idx]):
-                actions[agent] = np.array([-1.0, 0.0, -1.0, self.tx_power_action, -1.0], dtype=np.float32)
+                actions[agent] = np.array(
+                    [-1.0, 0.0, 0.0, -1.0, self.tx_power_action, -1.0], dtype=np.float32
+                )
                 continue
             delta = self.waypoints[idx] - env.positions[idx, :2]
             if float(np.linalg.norm(delta)) < 150.0:
@@ -51,7 +53,14 @@ class RandomWaypointCalibrationPolicy:
             direction_action = float(np.clip(angle / math.pi, -1.0, 1.0))
             recipient_action = float(self.rng.uniform(-1.0, 1.0))
             actions[agent] = np.array(
-                [1.0, direction_action, 1.0 if self.traffic else -1.0, self.tx_power_action, recipient_action],
+                [
+                    1.0,
+                    direction_action,
+                    0.0,  # topology calibration keeps the seeded initial altitude level
+                    1.0 if self.traffic else -1.0,
+                    self.tx_power_action,
+                    recipient_action,
+                ],
                 dtype=np.float32,
             )
         return actions

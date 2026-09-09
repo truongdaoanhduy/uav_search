@@ -87,15 +87,14 @@ class AnalyticalNetworkBackend:
         )
 
     def _effective_contact_range_m(self, tx_power_w: float, *, gcs: bool = False) -> float:
-        """Power-scaled operational reach around the calibrated reference range.
+        """Return the fixed scenario contact radius; RF power affects PHY only.
 
-        Under free-space loss, received power scales as P_tx / d^2, so a fixed
-        receiver threshold gives d_max proportional to sqrt(P_tx).  The base
-        range remains an explicit u6 calibration parameter.
+        ``tx_power_w`` is intentionally ignored here.  The u6 contact radius is a
+        calibrated neighbor-candidate constraint, while transmit power remains an
+        independent physical-layer control passed to the channel/rate model.
         """
-        base = self._contact_range_m(gcs=gcs)
-        reference = max(float(self.scenario.get("tx_power_reference_w", self._tx_power_w())), 1e-12)
-        return float(base * np.sqrt(max(float(tx_power_w), 0.0) / reference))
+        del tx_power_w
+        return self._contact_range_m(gcs=gcs)
 
     def _received_power_w(self, receiver_pos: np.ndarray, transmitter_pos: np.ndarray) -> float:
         delta = transmitter_pos - receiver_pos
@@ -480,25 +479,9 @@ class UavNetSimBackend:
         return float(self._setting(key, float("inf")))
 
     def _effective_contact_range_m(self, tx_power_w: float, *, gcs: bool = False) -> float:
-        """Return the configured reference range scaled by transmit power.
-
-        The scenario defines contact range at ``tx_power_reference_w``.  Under
-        the adopted free-space calibration, operational reach scales with the
-        square root of transmit power; UavNetSim still decides MAC/PHY success
-        for attempts that are inside this operational envelope.
-        """
-        base = self._contact_range_m(gcs=gcs)
-        reference = max(
-            float(self.scenario.get("tx_power_reference_w", self._setting("uavnetsim_tx_power_w", 0.1))),
-            1e-12,
-        )
-        # Operational reach is defined over the policy's configured action range.
-        # Tests may inject sub-minimum power to exercise native PHY/ARQ failure;
-        # keep those attempts inside the minimum-power contact envelope so the
-        # real MAC/PHY stack, rather than the geometry guard, resolves failure.
-        minimum = max(float(self.scenario.get("tx_power_min_w", reference)), 0.0)
-        range_power = max(float(tx_power_w), minimum)
-        return float(base * np.sqrt(range_power / reference))
+        """Return fixed candidate radius; native UavNetSim resolves PHY success."""
+        del tx_power_w
+        return self._contact_range_m(gcs=gcs)
 
     @staticmethod
     def _advance_episode_time(simulator: Any, dt_s: float) -> None:

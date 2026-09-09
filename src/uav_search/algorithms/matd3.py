@@ -35,7 +35,12 @@ class MATD3(MADDPG):
         # recipient have threshold/bin semantics. TD3 smoothing should perturb
         # only locally continuous coordinates.
         mask = [1.0] * self.action_dim
-        if bool(getattr(env, "peer_mode", False)) and self.action_dim == 5:
+        if bool(getattr(env, "peer_mode", False)) and self.action_dim == 6:
+            # [horizontal_thrust, heading, vertical_accel, tx_gate, tx_power, recipient]
+            # Smooth only continuous physical controls. Gate and recipient are
+            # hybrid/discretized coordinates and must not be randomly flipped.
+            mask = [1.0, 1.0, 1.0, 0.0, 1.0, 0.0]
+        elif bool(getattr(env, "peer_mode", False)) and self.action_dim == 5:
             mask = [1.0, 1.0, 0.0, 1.0, 0.0]
         self.target_smoothing_mask = torch.as_tensor(
             mask, dtype=torch.float32, device=self.device

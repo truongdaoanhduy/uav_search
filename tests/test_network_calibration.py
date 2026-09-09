@@ -3,7 +3,10 @@ from pathlib import Path
 
 import pytest
 
+from uav_search.config import load_config
+from uav_search.envs.paper_env import PaperUAVEnv
 from uav_search.runner.network_calibration import (
+    RandomWaypointCalibrationPolicy,
     run_calibration_episode,
     summarize_calibration,
     tx_power_to_action,
@@ -15,6 +18,22 @@ def test_tx_power_to_action_maps_configured_interval():
     assert tx_power_to_action(0.1, 0.1, 0.4) == pytest.approx(-1.0)
     assert tx_power_to_action(0.25, 0.1, 0.4) == pytest.approx(0.0)
     assert tx_power_to_action(0.4, 0.1, 0.4) == pytest.approx(1.0)
+
+
+
+
+def test_calibration_policy_emits_six_dimensional_u6_actions():
+    cfg = load_config("masac", "u6")
+    cfg["scenario"]["network_backend"] = "analytical"
+    env = PaperUAVEnv(cfg, seed=44)
+    env.reset(seed=44)
+    policy = RandomWaypointCalibrationPolicy(env, seed=44, tx_power_w=0.1, traffic=False)
+
+    actions = policy.actions(env)
+
+    assert set(actions) == set(env.agents)
+    assert all(action.shape == (6,) for action in actions.values())
+    assert all(action[2] == pytest.approx(0.0) for action in actions.values())
 
 
 def test_calibration_episode_uses_real_uavnetsim_and_advances_full_macro_time():
