@@ -13,6 +13,25 @@ scenario:
   altitude_bounds_provenance: "LITERATURE_BACKED_BASELINE:MRMG_2026"
   altitude_levels_m: [50.0, 100.0, 150.0]
   altitude_levels_provenance: RESEARCH_ADAPTATION
+
+  # Altitude-aware target sensing. Liu et al. (Drones 2024, 8, 378)
+  # explicitly publish low/mid/high FOV sizes 1/5/9, Pd/Pf profiles and
+  # target-probability threshold 0.99. Scaling their 100 m grid density to
+  # this 5 km root-paper map is a project research adaptation.
+  sensing_grid_cell_m: 100.0
+  sensing_grid_provenance: RESEARCH_ADAPTATION
+  sensing_fov_cells: [1, 5, 9]
+  sensing_fov_provenance: "CORE_PAPER_EXPLICIT:LIU_2024_3D_SEARCH"
+  sensing_detection_probability: [0.90, 0.80, 0.70]
+  sensing_false_alarm_probability: [0.10, 0.20, 0.30]
+  sensing_probability_provenance: "CORE_PAPER_EXPLICIT:LIU_2024_3D_SEARCH"
+  belief_prior: 0.5
+  belief_prior_provenance: "CORE_PAPER_EXPLICIT:LIU_2024_3D_SEARCH"
+  target_confirmation_threshold: 0.99
+  target_confirmation_provenance: "CORE_PAPER_EXPLICIT:LIU_2024_3D_SEARCH"
+  sensing_target_reward_weight: 1.0
+  sensing_cognitive_reward_weight: 0.1
+  sensing_reward_weight_provenance: "CORE_PAPER_EXPLICIT:LIU_2024_3D_SEARCH"
   # Hybrid option C: mission/mobility stay in PaperUAVEnv; UavNetSim owns peer MAC/PHY.
   network_backend: uavnetsim
   network_backend_provenance: RESEARCH_DESIGN

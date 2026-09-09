@@ -17,6 +17,15 @@ def idle_actions(env):
     return {a: np.array([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
 
 
+def force_belief_confirmation(env, target_idx=0, agent_idx=0):
+    """Bypass stochastic sensing when a test is about DTN/report behavior."""
+    y, x = env._target_grid_cell(target_idx)
+    env.belief_maps[:, y, x] = 0.1
+    env.belief_maps[agent_idx, y, x] = env.peer_target_confirmation_threshold
+    env._confirm_peer_targets()
+    env._retry_pending_reports()
+
+
 def test_u6_uses_root_paper_world_but_six_identical_multirotors():
     env = make_env()
     obs, info = env.reset(seed=44)
@@ -66,8 +75,7 @@ def test_target_confirmation_creates_one_report_in_detecting_uav_buffer():
     env.positions[0, :2] = [500.0, 500.0]
     env.targets[0] = [500.0, 500.0]
     env._refresh_links()
-
-    env.step(idle_actions(env))
+    force_belief_confirmation(env, target_idx=0, agent_idx=0)
 
     assert env.target_found[0]
     assert env.report_generated[0]
@@ -295,8 +303,7 @@ def test_target_discovery_is_local_knowledge_until_report_reaches_peer():
     env.obstacles[:, :2] = [4900.0, 4900.0]
     env.obstacles[:, 2] = 10.0
     env._refresh_links()
-
-    env.step(idle_actions(env))
+    force_belief_confirmation(env, target_idx=0, agent_idx=0)
     assert env.target_found[0]
     assert env.target_known_by_agent[0, 0]
     assert not env.target_known_by_agent[1, 0]
@@ -318,7 +325,7 @@ def test_detected_report_retries_after_buffer_space_becomes_available():
     env._enqueue_report(0, 1)
     env.targets[:] = [4900.0, 4900.0]
     env.targets[0] = env.positions[0, :2]
-    env.step(idle_actions(env))
+    force_belief_confirmation(env, target_idx=0, agent_idx=0)
     assert env.target_found[0]
     assert not env.report_generated[0]
     assert env.pending_report_source[0] == 0

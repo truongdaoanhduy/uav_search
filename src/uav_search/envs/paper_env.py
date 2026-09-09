@@ -8,6 +8,7 @@ from gymnasium.spaces import Box
 
 from .models import circle_collision, communication_rate_bps, multirotor_power_w, path_gain_linear, segment_circle_collision
 from .network_backends import NetworkStepResult, TransmissionIntent, create_network_backend
+from .sensing import bayes_update, binary_entropy, fov_offsets, profile_for_altitude
 
 
 GCS_RECIPIENT = -1
@@ -80,6 +81,25 @@ class PaperUAVEnv:
                 self.peer_altitude_levels_m > self.peer_altitude_max_m
             ):
                 raise ValueError("all altitude_levels_m must lie within altitude_min_m/altitude_max_m")
+            self.peer_sensing_grid_cell_m = float(self.scenario.get("sensing_grid_cell_m", 100.0))
+            self.peer_sensing_fov_cells = tuple(int(x) for x in self.scenario.get("sensing_fov_cells", [1, 5, 9]))
+            self.peer_sensing_pd = tuple(float(x) for x in self.scenario.get("sensing_detection_probability", [0.9, 0.8, 0.7]))
+            self.peer_sensing_pf = tuple(float(x) for x in self.scenario.get("sensing_false_alarm_probability", [0.1, 0.2, 0.3]))
+            self.peer_belief_prior = float(self.scenario.get("belief_prior", 0.5))
+            self.peer_target_confirmation_threshold = float(self.scenario.get("target_confirmation_threshold", 0.99))
+            self.peer_sensing_target_reward_weight = float(self.scenario.get("sensing_target_reward_weight", 1.0))
+            self.peer_sensing_cognitive_reward_weight = float(self.scenario.get("sensing_cognitive_reward_weight", 0.1))
+            if self.peer_sensing_grid_cell_m <= 0.0:
+                raise ValueError("sensing_grid_cell_m must be positive")
+            if len(self.peer_sensing_fov_cells) != len(self.peer_altitude_levels_m):
+                raise ValueError("sensing_fov_cells must align with altitude_levels_m")
+            if len(self.peer_sensing_pd) != len(self.peer_altitude_levels_m) or len(self.peer_sensing_pf) != len(self.peer_altitude_levels_m):
+                raise ValueError("sensing probability profiles must align with altitude_levels_m")
+            if not 0.0 < self.peer_belief_prior < 1.0:
+                raise ValueError("belief_prior must lie strictly between zero and one")
+            if not 0.5 < self.peer_target_confirmation_threshold < 1.0:
+                raise ValueError("target_confirmation_threshold must lie between 0.5 and 1")
+            self.peer_sensing_grid_n = int(math.ceil(self.area_size_m / self.peer_sensing_grid_cell_m))
             if self.peer_report_bytes <= 0 or self.peer_buffer_bytes <= 0:
                 raise ValueError("report_bytes and buffer_bytes must be positive")
             if self.peer_report_ttl_s <= 0 or self.peer_neighbor_cache_ttl_steps <= 0:
@@ -109,7 +129,7 @@ class PaperUAVEnv:
         # the root-paper observation content for the homogeneous multi-rotor agents.
         # Peer mode adds application queue/GCS-local state plus the previous
         # hop delivery result (a local ACK-like signal, not global mission truth).
-        self.peer_obs_extra_dim = 5 if self.peer_mode else 0
+        self.peer_obs_extra_dim = 14 if self.peer_mode else 0
         self.obs_dim = 9 + (self.n_agents - 1) * 6 + self.n_targets + self.peer_obs_extra_dim
         self.action_dim = 6 if self.peer_mode else 2
         self.observation_space = Box(-np.inf, np.inf, shape=(self.obs_dim,), dtype=np.float32)
@@ -236,6 +256,18 @@ class PaperUAVEnv:
             self.last_tx_success = np.zeros(self.n_agents, dtype=bool)
             self.last_delivery_reward_by_agent = np.zeros(self.n_agents, dtype=np.float64)
             self.target_known_by_agent = np.zeros((self.n_agents, self.n_targets), dtype=bool)
+            self.belief_maps = np.full(
+                (self.n_agents, self.peer_sensing_grid_n, self.peer_sensing_grid_n),
+                self.peer_belief_prior,
+                dtype=np.float64,
+            )
+            self.last_sensor_positive = np.zeros((self.n_agents, self.n_targets), dtype=bool)
+            self.last_information_gain_by_agent = np.zeros(self.n_agents, dtype=np.float64)
+            self.last_scanned_cells_by_agent = np.zeros(self.n_agents, dtype=np.int64)
+            self.last_positive_sensor_observations_by_agent = np.zeros(self.n_agents, dtype=np.int64)
+            self.total_scanned_cells = 0
+            self.total_positive_sensor_observations = 0
+            self.total_information_gain = 0.0
             self.report_generated = np.zeros(self.n_targets, dtype=bool)
             self.pending_report_source = np.full(self.n_targets, -1, dtype=np.int64)
             self.report_created_step = np.full(self.n_targets, -1, dtype=np.int64)
@@ -462,7 +494,11 @@ class PaperUAVEnv:
         if self.peer_mode:
             if self.target_known_by_agent[idx, target_idx]:
                 return 0.0
-        elif self.target_found[target_idx]:
+            if not self.last_sensor_positive[idx, target_idx]:
+                return 0.0
+            d = float(np.linalg.norm(self.targets[target_idx] - self.positions[idx, :2]))
+            return d / self.area_size_m
+        if self.target_found[target_idx]:
             return 0.0
         d = float(np.linalg.norm(self.targets[target_idx] - self.positions[idx, :2]))
         detect_range = (
@@ -473,6 +509,76 @@ class PaperUAVEnv:
         if d > detect_range:
             return 0.0
         return d / self.area_size_m
+
+    def _xy_grid_cell(self, xy: np.ndarray) -> tuple[int, int]:
+        x = int(np.clip(math.floor(float(xy[0]) / self.peer_sensing_grid_cell_m), 0, self.peer_sensing_grid_n - 1))
+        y = int(np.clip(math.floor(float(xy[1]) / self.peer_sensing_grid_cell_m), 0, self.peer_sensing_grid_n - 1))
+        return y, x
+
+    def _target_grid_cell(self, target_idx: int) -> tuple[int, int]:
+        if not self.peer_mode:
+            raise RuntimeError("target grid cells are defined only for homogeneous_peer scenarios")
+        return self._xy_grid_cell(self.targets[int(target_idx)])
+
+    def _sensing_profile(self, agent_idx: int):
+        if not self.peer_mode:
+            raise RuntimeError("altitude-aware sensing is defined only for homogeneous_peer scenarios")
+        return profile_for_altitude(
+            float(self.positions[int(agent_idx), 2]),
+            self.peer_altitude_levels_m,
+            self.peer_sensing_fov_cells,
+            self.peer_sensing_pd,
+            self.peer_sensing_pf,
+        )
+
+    def _sensing_cells(self, agent_idx: int) -> list[tuple[int, int]]:
+        center_y, center_x = self._xy_grid_cell(self.positions[int(agent_idx), :2])
+        profile = self._sensing_profile(agent_idx)
+        cells: list[tuple[int, int]] = []
+        for dy, dx in fov_offsets(profile.fov_cells):
+            y, x = center_y + dy, center_x + dx
+            if 0 <= y < self.peer_sensing_grid_n and 0 <= x < self.peer_sensing_grid_n:
+                cells.append((y, x))
+        return cells
+
+    def _belief_patch(self, agent_idx: int) -> list[float]:
+        center_y, center_x = self._xy_grid_cell(self.positions[int(agent_idx), :2])
+        allowed = set(self._sensing_cells(agent_idx))
+        patch: list[float] = []
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                y, x = center_y + dy, center_x + dx
+                if (y, x) in allowed:
+                    patch.append(float(self.belief_maps[agent_idx, y, x]))
+                else:
+                    patch.append(0.0)
+        return patch
+
+    def _confirm_peer_targets(self) -> None:
+        if not self.peer_mode:
+            return
+        threshold = self.peer_target_confirmation_threshold
+        for target_idx in range(self.n_targets):
+            if self.target_found[target_idx]:
+                continue
+            y, x = self._target_grid_cell(target_idx)
+            candidates: list[tuple[float, float, int]] = []
+            for agent_idx in range(self.n_agents):
+                if not self.uav_active[agent_idx]:
+                    continue
+                posterior = float(self.belief_maps[agent_idx, y, x])
+                if posterior < threshold:
+                    continue
+                horizontal_distance = float(np.linalg.norm(self.targets[target_idx] - self.positions[agent_idx, :2]))
+                candidates.append((-posterior, horizontal_distance, agent_idx))
+            if not candidates:
+                continue
+            _, _, detector = min(candidates)
+            detector = int(detector)
+            self.target_found[target_idx] = True
+            self.target_known_by_agent[detector, target_idx] = True
+            self.pending_report_source[target_idx] = detector
+            self.last_new_targets_by_agent[detector] += 1
 
     def _observations(self) -> dict[str, np.ndarray]:
         """Build type-specific observations from paper Eqs. (17)-(20).
@@ -556,6 +662,7 @@ class PaperUAVEnv:
                     float(gcs_delta[1]),
                     float(self.last_gcs_rates_bps[i]) / rate_scale,
                     float(self.last_tx_success[i]),
+                    *self._belief_patch(i),
                 ]
 
             vec = np.asarray(own + other + target + peer_extra, dtype=np.float32)
@@ -620,25 +727,41 @@ class PaperUAVEnv:
             self.expired_reports += 1
 
     def _perform_peer_target_detection(self) -> None:
-        """Update environment truth and per-agent knowledge without global leakage."""
+        """Run altitude-aware stochastic sensing and Bayesian target confirmation."""
         self.last_new_targets_by_agent.fill(0)
-        for target_idx in range(self.n_targets):
-            d = np.linalg.norm(self.positions[self.multirotor_indices, :2] - self.targets[target_idx], axis=1)
-            if self.peer_mode:
-                active_local = self.uav_active[self.multirotor_indices]
-                d = np.where(active_local, d, np.inf)
-            close_local = np.flatnonzero(d <= float(self.assumed["target_found_m"]))
-            for local_idx in close_local:
-                agent_idx = int(self.multirotor_indices[int(local_idx)])
-                self.target_known_by_agent[agent_idx, target_idx] = True
-            if self.target_found[target_idx] or len(close_local) == 0:
+        self.last_sensor_positive.fill(False)
+        self.last_information_gain_by_agent.fill(0.0)
+        self.last_scanned_cells_by_agent.fill(0)
+        self.last_positive_sensor_observations_by_agent.fill(0)
+
+        target_cells = [self._target_grid_cell(k) for k in range(self.n_targets)]
+        targets_by_cell: dict[tuple[int, int], list[int]] = {}
+        for target_idx, cell in enumerate(target_cells):
+            targets_by_cell.setdefault(cell, []).append(target_idx)
+
+        for agent_idx in range(self.n_agents):
+            if not self.uav_active[agent_idx]:
                 continue
-            closest_local = int(np.argmin(d))
-            detector = int(self.multirotor_indices[closest_local])
-            self.target_found[target_idx] = True
-            self.target_known_by_agent[detector, target_idx] = True
-            self.pending_report_source[target_idx] = detector
-            self.last_new_targets_by_agent[detector] += 1
+            profile = self._sensing_profile(agent_idx)
+            for y, x in self._sensing_cells(agent_idx):
+                occupied = (y, x) in targets_by_cell
+                probability = profile.pd if occupied else profile.pf
+                measurement = bool(self.rng.random() < probability)
+                prior = float(self.belief_maps[agent_idx, y, x])
+                posterior = bayes_update(prior, measurement, profile.pd, profile.pf)
+                information_gain = max(0.0, binary_entropy(prior) - binary_entropy(posterior))
+                self.belief_maps[agent_idx, y, x] = posterior
+                self.last_information_gain_by_agent[agent_idx] += information_gain
+                self.last_scanned_cells_by_agent[agent_idx] += 1
+                if measurement:
+                    self.last_positive_sensor_observations_by_agent[agent_idx] += 1
+                    for target_idx in targets_by_cell.get((y, x), []):
+                        self.last_sensor_positive[agent_idx, target_idx] = True
+
+        self.total_scanned_cells += int(self.last_scanned_cells_by_agent.sum())
+        self.total_positive_sensor_observations += int(self.last_positive_sensor_observations_by_agent.sum())
+        self.total_information_gain += float(self.last_information_gain_by_agent.sum())
+        self._confirm_peer_targets()
 
     def _peer_transmit(self, act: np.ndarray) -> None:
         """Execute one-hop report transfers through the configured network backend.
@@ -753,21 +876,31 @@ class PaperUAVEnv:
         """Paper Eqs. (24)-(25): target-search reward for rotor/fixed-wing UAVs."""
         if self.n_targets == 0:
             return 0.0
+        zeta = float(self.assumed["search_reward_coeff"])
+        if self.peer_mode:
+            # Liu et al. use target-discovery and cognitive rewards with relative
+            # weights 1.0 and 0.1. The existing zeta=20 scale is a project
+            # adaptation so sensing remains comparable to u6 communication rewards.
+            return float(
+                zeta
+                * (
+                    self.peer_sensing_target_reward_weight * float(self.last_new_targets_by_agent[idx])
+                    + self.peer_sensing_cognitive_reward_weight * float(self.last_information_gain_by_agent[idx])
+                )
+            )
         dists = np.linalg.norm(self.targets - self.positions[idx, :2], axis=1)
         active = ~self.target_found
-        zeta = float(self.assumed["search_reward_coeff"])
-        detection_bonus = float(zeta * self.last_new_targets_by_agent[idx]) if self.peer_mode else 0.0
         if not np.any(active):
-            return detection_bonus
+            return 0.0
         d = float(np.min(dists[active]))
         delta_d = float(self.assumed["reward_distance_epsilon_m"])
         if fixed:
-            return detection_bonus + (zeta / (d + delta_d) if d <= self.assumed["fixed_detect_m"] else 0.0)
+            return zeta / (d + delta_d) if d <= self.assumed["fixed_detect_m"] else 0.0
         if d < self.assumed["target_found_m"]:
-            return detection_bonus + zeta
+            return zeta
         if d <= self.assumed["target_detect_m"]:
-            return detection_bonus + zeta / (d + delta_d)
-        return detection_bonus
+            return zeta / (d + delta_d)
+        return 0.0
 
     def _safety_reward(self, idx: int) -> tuple[float, int]:
         """Paper Eq. (23): inverse-distance inter-UAV safety penalty."""
