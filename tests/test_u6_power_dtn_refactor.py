@@ -14,20 +14,23 @@ def analytical_u6(seed=44):
 
 
 def idle_actions(env):
-    # Dimension 3 is tx_power after the refactor; gate is OFF here.
+    # Gate is OFF; vertical acceleration is neutral and RF power is at its minimum.
     return {a: np.array([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
 
 
 def test_u6_config_uses_literature_backed_report_lifetime_and_power_contract():
     cfg = load_config("masac", "u6")["scenario"]
     assert cfg["report_bytes"] == 1_000_000
-    assert cfg["buffer_bytes"] == 10_000_000
+    assert cfg["buffer_bytes"] == 100_000_000
     assert cfg["report_ttl_s"] == pytest.approx(300.0)
     assert cfg["tx_power_min_w"] == pytest.approx(0.1)
     assert cfg["tx_power_max_w"] == pytest.approx(0.4)
     assert cfg["tx_power_reference_w"] == pytest.approx(0.1)
     assert cfg["initialization"] == "gcs_launch_pads"
-    assert cfg["network_packet_payload_bytes"] > 0
+    assert cfg["network_packet_payload_bytes"] == 1024
+    assert cfg["neighbor_cache_ttl_steps"] == 5
+    assert cfg["initial_min_separation_m"] == pytest.approx(141.4)
+    assert cfg["battery_capacity_j"] == pytest.approx(77.0 * 3600.0)
 
 
 def test_u6_launch_pads_share_gcs_site_without_initial_collision():
@@ -168,7 +171,7 @@ def test_report_lifetime_is_measured_in_seconds_not_hardcoded_steps():
     cfg = deepcopy(load_config("masac", "u6"))
     cfg["scenario"]["network_backend"] = "analytical"
     cfg["scenario"]["report_ttl_s"] = 3.0
-    cfg["assumed"]["dt_s"] = 2.0
+    cfg["scenario"]["dt_s"] = 2.0
     env = PaperUAVEnv(cfg, seed=54)
     env.reset(seed=54)
     env._enqueue_report(0, 0)
@@ -229,3 +232,66 @@ def test_tx_power_slot_no_longer_controls_byte_fraction():
 
     assert info["network_attempted_bytes"] > 0
     assert info["network_delivered_bytes"] > 0
+
+
+def test_packet_payload_is_packetization_size_not_one_packet_per_rl_step():
+    cfg = deepcopy(load_config("masac", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    cfg["scenario"]["network_packet_payload_bytes"] = 1024
+    env = PaperUAVEnv(cfg, seed=58)
+    env.reset(seed=58)
+    env.positions[0, :2] = env.gcs_position[:2]
+    env._refresh_links()
+    assert env._enqueue_report(0, 0)
+    actions = idle_actions(env)
+    actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, -1.0, 0.999], dtype=np.float32)
+
+    _, _, _, _, info = env.step(actions)
+
+    assert info["network_attempted_bytes"] > cfg["scenario"]["network_packet_payload_bytes"]
+
+
+def test_u6_scenario_battery_capacity_overrides_legacy_assumed_capacity():
+    cfg = deepcopy(load_config("masac", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    cfg["scenario"]["battery_capacity_j"] = 1000.0
+    env = PaperUAVEnv(cfg, seed=59)
+    env.reset(seed=59)
+    before = float(env.battery_pct[0])
+
+    _, _, _, _, info = env.step(idle_actions(env))
+
+    expected_drop = 100.0 * float(env.last_energy_by_agent_j[0]) / 1000.0
+    assert before - env.battery_pct[0] == pytest.approx(expected_drop)
+    assert info["battery_capacity_j"] == pytest.approx(1000.0)
+
+
+def test_u6_uses_literature_backed_safe_distance_without_changing_legacy_scenarios():
+    cfg = deepcopy(load_config("masac", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    env = PaperUAVEnv(cfg, seed=60)
+    env.reset(seed=60)
+    assert env.scenario["safety_distance_m"] == pytest.approx(141.4)
+    env.positions[0] = [1000.0, 1000.0, 100.0]
+    env.positions[1] = [1120.0, 1000.0, 100.0]
+    penalty, close = env._safety_reward(0)
+    assert close >= 1
+    assert penalty < 0.0
+
+    legacy = PaperUAVEnv(load_config("masac", "f1_m5"), seed=60)
+    legacy.reset(seed=60)
+    legacy.positions[0] = [1000.0, 1000.0, 200.0]
+    legacy.positions[1] = [1120.0, 1000.0, 200.0]
+    _, legacy_close = legacy._safety_reward(0)
+    assert legacy_close == 0
+
+
+def test_u6_can_use_scenario_specific_literature_backed_macro_step_without_changing_legacy():
+    cfg = deepcopy(load_config("masac", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    cfg["scenario"]["dt_s"] = 2.0
+    env = PaperUAVEnv(cfg, seed=61)
+    assert env.dt == pytest.approx(2.0)
+
+    legacy = PaperUAVEnv(load_config("masac", "f1_m5"), seed=61)
+    assert legacy.dt == pytest.approx(float(legacy.assumed["dt_s"]))

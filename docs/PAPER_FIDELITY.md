@@ -165,14 +165,12 @@ These points are intentionally left visible instead of being silently filled wit
 
 ## 8. Homogeneous `u6` research adaptation (not a paper reproduction)
 
-The repository also contains `configs/scenarios/u6.yaml`. This scenario intentionally uses the **same lightweight root-paper simulation implementation** while changing the research question:
+`configs/scenarios/u6.yaml` now deliberately separates the root-paper reproduction from a new homogeneous research scenario. `u6` uses six identical multi-rotors, full 3D motion, altitude-aware Bayesian sensing, a ground command station, persistent DTN buffering, and UavNetSim MAC/PHY execution. The action is six-dimensional: horizontal thrust, heading, vertical acceleration, transmit gate, transmit power, and immediate recipient/next hop.
 
-- six identical multi-rotor UAVs (`fixed_wing: 0`, `multirotor: 6`);
-- no fixed-wing leader and no leader/follower formation;
-- every UAV pair is a candidate A2A link and the existing paper Eq. (3)-(7) rate calculation determines usable connectivity;
-- the first two action components remain the root-paper multi-rotor `{F, theta}` motion action;
-- three added continuous components control `transmit/not`, transmission amount, and recipient UAV/GCS;
-- confirmed targets generate finite-buffer mission reports and forwarding is limited to one hop per RL step;
-- a ground command station, report size, buffer size, and report-delivery reward are **adapted assumptions**, because the root paper does not publish packet-buffer/GCS delivery semantics.
+The change does **not** retroactively make these elements part of the Ao et al. root paper. Each `u6` subsystem parameter has its own provenance. Strong examples are Liu et al.'s 1/5/9 FOV and 0.9/0.8/0.7 detection profiles, Du et al.'s 1 MB/300 s/100 MB VDTN application parameters, UavNetSim's native lower-layer defaults, and published baselines for 50/100/150 m flight levels, 2 km WLAN radius, 0.1--0.4 W transmit power and 77 Wh battery capacity.
 
-Therefore `u6` should be described as **root-paper-simulator-based / root-paper-inspired**, not as a reproduction of the paper's heterogeneous leader-follower scenario. The legacy `f1_m5` and `f1_m9` paths remain unchanged for reproduction comparisons.
+Several combinations remain original research adaptations: mapping Liu's abstract sensing levels to the physical 50/100/150 m levels, the fixed 50 x 50 belief grid, the exact six-coordinate hybrid action, the 300 m launch-pad geometry, and the exact edge-GCS coordinate. Obstacle count/radii, the delivery reward scale, the per-joule reward coefficient, and the simplified propulsion coefficients remain assumptions/calibration-required choices rather than paper values.
+
+The complete parameter-by-parameter audit, including primary references and what must still be calibrated, is maintained in [`U6_PROVENANCE.md`](U6_PROVENANCE.md).
+
+The legacy `f1_m5` / `f1_m9` reproduction paths retain their original action, 2.5D approximation, sensing assumptions and analytical paper channel; they are not silently converted to the new `u6` model.

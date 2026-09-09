@@ -10,9 +10,12 @@ scenario:
   # physical metre values. The 100 m midpoint and mapping are project design.
   altitude_min_m: 50.0
   altitude_max_m: 150.0
-  altitude_bounds_provenance: "LITERATURE_BACKED_BASELINE:MRMG_2026"
+  altitude_bounds_provenance: "LITERATURE_BACKED_BASELINE:DRONE_DELIVERY_MULTI_FLIGHT_LEVEL_2024"
   altitude_levels_m: [50.0, 100.0, 150.0]
-  altitude_levels_provenance: RESEARCH_ADAPTATION
+  # The exact three flight levels 50/100/150 m are used in published multi-flight-level UAV work.
+  # Mapping Liu et al.'s low/mid/high sensing profiles onto these physical levels remains an adaptation.
+  altitude_levels_provenance: "LITERATURE_BACKED_BASELINE:DRONE_DELIVERY_MULTI_FLIGHT_LEVEL_2024"
+  altitude_sensing_mapping_provenance: RESEARCH_ADAPTATION
 
   # Altitude-aware target sensing. Liu et al. (Drones 2024, 8, 378)
   # explicitly publish low/mid/high FOV sizes 1/5/9, Pd/Pf profiles and
@@ -34,60 +37,86 @@ scenario:
   sensing_reward_weight_provenance: "CORE_PAPER_EXPLICIT:LIU_2024_3D_SEARCH"
   # Hybrid option C: mission/mobility stay in PaperUAVEnv; UavNetSim owns peer MAC/PHY.
   network_backend: uavnetsim
-  network_backend_provenance: RESEARCH_DESIGN
+  network_backend_provenance: RESEARCH_ADAPTATION
   uavnetsim_channel_mode: a2a
-  uavnetsim_channel_mode_provenance: UAVNETSIM_EXPLICIT
+  uavnetsim_channel_mode_provenance: UAVNETSIM_NATIVE
   uavnetsim_bit_rate_bps: 2000000
-  uavnetsim_bit_rate_provenance: UAVNETSIM_DEFAULT_80211B
+  uavnetsim_bit_rate_provenance: UAVNETSIM_NATIVE
   # RF transmit power is deliberately separate from the root paper's P_com=5 W
   # communication-energy term. UavNetSim upstream uses 0.1 W by default.
   uavnetsim_tx_power_w: 0.1
-  uavnetsim_tx_power_provenance: UAVNETSIM_DEFAULT_RF_POWER
+  uavnetsim_tx_power_provenance: UAVNETSIM_NATIVE
   uavnetsim_sinr_threshold_db: 6.0
-  uavnetsim_sinr_threshold_provenance: UAVNETSIM_DEFAULT_80211B
+  uavnetsim_sinr_threshold_provenance: UAVNETSIM_NATIVE
   uavnetsim_los_model: free_space
   uavnetsim_nlos_model: urban
-  # Reference contact range at reference RF power. Actual operational reach is
-  # power-scaled and still subjected to UavNetSim MAC/PHY/SINR.
+  # Fixed one-hop candidate radius. A 2026 heterogeneous maritime unmanned-system
+  # study reports approximately 2 km WLAN range; UavNetSim still resolves PHY/MAC
+  # success inside this geometric candidate radius. Cross-scenario calibration remains required.
   peer_contact_range_m: 2000.0
   gcs_contact_range_m: 2000.0
-  contact_range_provenance: RESEARCH_DESIGN_CALIBRATION_REQUIRED
+  contact_range_provenance: "LITERATURE_BACKED_BASELINE:ENERGY_INFORMATION_DECISION_2026_2KM_WLAN"
+  contact_range_calibration_status: RESEARCH_DESIGN_CALIBRATION_REQUIRED
   tx_power_min_w: 0.1
   tx_power_max_w: 0.4
   tx_power_reference_w: 0.1
-  tx_power_provenance: BUFFER_AIDED_MULTI_UAV_RELAY_REFERENCE
-  network_packet_payload_bytes: 32768
-  network_packet_payload_provenance: RESEARCH_DESIGN_SIMULATION_GRANULARITY
+  tx_power_provenance: "LITERATURE_BACKED_BASELINE:CAO_2019_BUFFER_AIDED_MULTI_UAV_RELAY"
+  # UavNetSim's installed default average data payload is 1024 bytes (8192 bits),
+  # which is also a common explicit packet size in FANET simulation papers.
+  network_packet_payload_bytes: 1024
+  network_packet_payload_provenance: UAVNETSIM_NATIVE
+  network_packet_payload_literature_support: "LITERATURE_BACKED_BASELINE:FANET_1024B"
   targets: 10
   targets_provenance: PAPER_INFERRED
   obstacles: 6
-  obstacles_provenance: ASSUMED
+  obstacles_provenance: RESEARCH_ASSUMPTION
+  # Buffer-aided multi-UAV relaying literature commonly discretizes flight into 1 s slots.
+  dt_s: 1.0
+  dt_provenance: "LITERATURE_BACKED_BASELINE:CAO_2022_BUFFER_AIDED_MULTI_UAV_RELAY_1S_SLOT"
   # Research mission duration: the paper-faithful scenarios remain at 50 steps.
   # 600 x 1 s lets a 10 m/s multirotor traverse 6 km, enough to search a 5 km map
   # and alter the network topology instead of being trapped near initialization.
   episode_steps: 600
-  episode_steps_provenance: RESEARCH_DESIGN_JTFR_JUROR_INSPIRED
+  # A SAR FANET study uses 600 s explicitly; with dt=1 s this is the same horizon.
+  # The value is literature-backed but still requires sensitivity analysis on this 5 km map.
+  episode_steps_provenance: "LITERATURE_BACKED_BASELINE:SAR_OLSR_2023_600S"
+  episode_steps_calibration_status: RESEARCH_DESIGN_CALIBRATION_REQUIRED
   # All UAVs deploy from the same emergency GCS site but occupy separate safe
   # launch pads so the initial state is not an artificial collision.
   initialization: gcs_launch_pads
+  # Published search frameworks deploy all UAVs from a common base. Separate pads
+  # avoid an artificial t=0 collision; 300 m is geometry chosen to fit six pads.
   launch_radius_m: 300.0
-  initial_min_separation_m: 150.0
-  initialization_provenance: RESEARCH_DESIGN_COMMON_GCS_SITE
+  launch_radius_provenance: RESEARCH_DESIGN_DERIVED_SAFE_PAD_GEOMETRY
+  safety_distance_m: 141.4
+  safety_distance_provenance: "LITERATURE_BACKED_BASELINE:LIU_2024_SAFE_DISTANCE_141_4M"
+  initial_min_separation_m: 141.4
+  initial_min_separation_provenance: "RESEARCH_ADAPTATION:LIU_2024_SAFE_DISTANCE_141_4M"
+  initialization_provenance: "LITERATURE_BACKED_BASELINE:GLIDE_2024_COMMON_BASE"
   # Fixed edge command vehicle: direct communication is useful near the staging
   # side, while exploration farther into the map naturally needs relays/SCF.
   gcs_position_m: [0.0, 2500.0, 0.0]
-  gcs_position_provenance: ADAPTED_ASSUMPTION
+  # SAR FANET literature explicitly places the ground base station at the edge of
+  # the simulated search area. The exact midpoint-on-edge coordinate is adapted here.
+  gcs_position_provenance: "RESEARCH_ADAPTATION:SAR_OLSR_2023_EDGE_BASE_STATION"
   report_bytes: 1000000
-  report_bytes_provenance: UAV_ASSISTED_VDTN_500KB_TO_1MB
-  buffer_bytes: 10000000
-  buffer_bytes_provenance: RESEARCH_DESIGN_LITERATURE_SENSITIVITY_BASELINE
+  report_bytes_provenance: "LITERATURE_BACKED_BASELINE:DU_2021_UAV_ASSISTED_VDTN_500KB_TO_1MB"
+  # Du et al. explicitly use 100 MB buffers for UAV nodes in UAV-assisted VDTN experiments.
+  buffer_bytes: 100000000
+  buffer_bytes_provenance: "LITERATURE_BACKED_BASELINE:DU_2021_UAV_ASSISTED_VDTN_100MB_UAV_BUFFER"
   delivery_reward: 20.0
-  delivery_reward_provenance: ADAPTED_ASSUMPTION
+  delivery_reward_provenance: RESEARCH_DESIGN_CALIBRATION_REQUIRED
   report_ttl_s: 300.0
-  report_ttl_provenance: UAV_ASSISTED_VDTN_EXPLICIT
-  neighbor_cache_ttl_steps: 50
-  neighbor_cache_provenance: RESEARCH_DESIGN_JUROR_INSPIRED
+  report_ttl_provenance: "LITERATURE_BACKED_BASELINE:DU_2021_UAV_ASSISTED_VDTN_300S_TTL"
+  # DJI Mavic 3 Enterprise is a close small-multirotor hardware reference; published
+  # smart-sensing work reports a 77 Wh battery, i.e. 277.2 kJ.
+  battery_capacity_j: 277200.0
+  battery_capacity_provenance: "LITERATURE_BACKED_BASELINE:MAVIC3_ENTERPRISE_77WH"
+  # UavNetSim's native virtual-force neighbor table expires entries after 5 s.
+  # With dt=1 s, five RL steps use the same freshness horizon.
+  neighbor_cache_ttl_steps: 5
+  neighbor_cache_provenance: "RESEARCH_ADAPTATION:UAVNETSIM_NATIVE_5S_NEIGHBOR_LIFETIME"
   # Long u6 horizons must not reuse the root paper's positive residual-battery
   # reward every step; use a small explicit per-Joule cost instead.
   energy_cost_per_j: 0.001
-  energy_cost_provenance: RESEARCH_DESIGN
+  energy_cost_provenance: RESEARCH_DESIGN_CALIBRATION_REQUIRED

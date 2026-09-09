@@ -24,7 +24,7 @@ def idle_actions(env: PaperUAVEnv):
 def test_u6_literature_backed_report_buffer_lifetime_and_power_defaults():
     cfg = load_config("masac", "u6")["scenario"]
     assert cfg["report_bytes"] == 1_000_000
-    assert cfg["buffer_bytes"] == 10_000_000
+    assert cfg["buffer_bytes"] == 100_000_000
     assert cfg["report_ttl_s"] == pytest.approx(300.0)
     assert cfg["uavnetsim_tx_power_w"] == pytest.approx(0.1)
     assert cfg["tx_power_min_w"] == pytest.approx(0.1)
@@ -81,7 +81,8 @@ def test_neighbor_freshness_does_not_treat_reverse_only_edge_as_live():
     env.neighbor_cache_seen_step[0, 1] = 0
     env.neighbor_cache_positions[0, 1] = env.positions[1]
     env.neighbor_cache_battery[0, 1] = 100.0
-    env.step_count = 10
+    # Age is stale but still inside the 5-step UavNetSim-backed cache lifetime.
+    env.step_count = 3
     env.last_adjacency.fill(0)
     env.last_adjacency[1, 0] = 1  # only UAV0 -> UAV1; UAV0 cannot receive live state from UAV1.
     slot = env._observations()["uav_0"][9:15]

@@ -35,13 +35,16 @@ class PaperUAVEnv:
                 "episode_steps_override", self.scenario.get("episode_steps", self.paper["episode_steps"])
             )
         )
-        self.dt = float(self.assumed["dt_s"])
+        self.dt = float(self.scenario.get("dt_s", self.assumed["dt_s"]))
         self.n_fixed = int(self.scenario["fixed_wing"])
         self.n_rotor = int(self.scenario["multirotor"])
         self.n_agents = self.n_fixed + self.n_rotor
         self.n_targets = int(self.scenario["targets"])
         self.n_obstacles = int(self.scenario["obstacles"])
         self.peer_mode = str(self.scenario.get("architecture", "paper_heterogeneous")) == "homogeneous_peer"
+        self.safety_distance_m = float(
+            self.scenario.get("safety_distance_m", self.assumed["safety_distance_m"])
+        )
         if self.peer_mode and self.n_fixed != 0:
             raise ValueError("homogeneous_peer requires fixed_wing=0; all UAVs use the root-paper multi-rotor model")
         if self.peer_mode:
@@ -67,6 +70,11 @@ class PaperUAVEnv:
             self.peer_tx_power_max_w = float(self.scenario.get("tx_power_max_w", 0.4))
             self.peer_tx_power_reference_w = float(self.scenario.get("tx_power_reference_w", 0.1))
             self.peer_energy_cost_per_j = float(self.scenario.get("energy_cost_per_j", 0.001))
+            self.peer_battery_capacity_j = float(
+                self.scenario.get("battery_capacity_j", self.assumed["battery_capacity_j"])
+            )
+            if self.peer_battery_capacity_j <= 0.0:
+                raise ValueError("battery_capacity_j must be positive")
             self.peer_altitude_min_m = float(self.scenario.get("altitude_min_m", self.assumed["multirotor_altitude_m"]))
             self.peer_altitude_max_m = float(self.scenario.get("altitude_max_m", self.assumed["multirotor_altitude_m"]))
             self.peer_altitude_levels_m = np.asarray(
@@ -146,7 +154,7 @@ class PaperUAVEnv:
             return self.rng.uniform(margin, self.area_size_m - margin, size=(self.n_agents, 2))
         if mode == "gcs_launch_pads":
             radius = float(self.scenario.get("launch_radius_m", 300.0))
-            min_sep = float(self.scenario.get("initial_min_separation_m", self.assumed["safety_distance_m"]))
+            min_sep = float(self.scenario.get("initial_min_separation_m", self.safety_distance_m))
             if radius <= 0.0 or min_sep < 0.0:
                 raise ValueError("launch_radius_m must be positive and initial_min_separation_m non-negative")
             # Same emergency GCS site, distinct physical pads.  With an edge GCS,
@@ -168,7 +176,7 @@ class PaperUAVEnv:
         if center.shape != (2,):
             raise ValueError("scenario.launch_center_m must contain [x, y]")
         radius = float(self.scenario.get("launch_radius_m", 250.0))
-        min_sep = float(self.scenario.get("initial_min_separation_m", self.assumed["safety_distance_m"]))
+        min_sep = float(self.scenario.get("initial_min_separation_m", self.safety_distance_m))
         if radius <= 0.0 or min_sep < 0.0:
             raise ValueError("launch_radius_m must be positive and initial_min_separation_m non-negative")
 
@@ -801,12 +809,11 @@ class PaperUAVEnv:
                 receiver_room = max(0, self.peer_buffer_bytes - int(self.queue_bytes[recipient])) if self.uav_active[recipient] else 0
             self.last_selected_tx_rate_bps[sender] = rate
             self.last_selected_tx_distance_m[sender] = distance_m
-            # tx_amount was removed: the application offers as much queued data as
-            # can fit in one nominal MAC slot; the backend decides actual delivery.
-            packet_payload_bytes = int(self.scenario.get("network_packet_payload_bytes", 32_768))
+            # The application offers as much queued data as can fit in one
+            # nominal MAC slot. ``network_packet_payload_bytes`` is a packetization
+            # size owned by the backend, not a hidden one-packet-per-RL-step cap.
             budget = min(
                 int(nominal_rate_bps * self.dt / 8.0),
-                max(1, packet_payload_bytes),
                 queued_at_start,
                 receiver_room,
             )
@@ -912,7 +919,7 @@ class PaperUAVEnv:
             if j == idx:
                 continue
             d = float(np.linalg.norm(self.positions[j] - self.positions[idx]))
-            if d <= self.assumed["safety_distance_m"]:
+            if d <= self.safety_distance_m:
                 close += 1
                 penalty -= eta / (d + delta_d)
         return penalty, close
@@ -1026,7 +1033,8 @@ class PaperUAVEnv:
                 self.last_energy_by_agent_j[i] = e
             local_idx = self.multirotor_indices.index(i)
             self.cumulative_energy_by_rotor_j[local_idx] += e
-            self.battery_pct[i] = max(0.0, self.battery_pct[i] - 100.0 * e / self.assumed["battery_capacity_j"])
+            battery_capacity_j = self.peer_battery_capacity_j if self.peer_mode else float(self.assumed["battery_capacity_j"])
+            self.battery_pct[i] = max(0.0, self.battery_pct[i] - 100.0 * e / battery_capacity_j)
 
         before_clip_xy = self.positions[:, :2].copy()
         self.positions[:, :2] = np.clip(self.positions[:, :2], 0.0, self.area_size_m)
@@ -1060,7 +1068,7 @@ class PaperUAVEnv:
                     self.velocities[i] = 0.0
         for i in range(self.n_agents):
             for j in range(i + 1, self.n_agents):
-                if np.linalg.norm(self.positions[i] - self.positions[j]) <= self.assumed["safety_distance_m"]:
+                if np.linalg.norm(self.positions[i] - self.positions[j]) <= self.safety_distance_m:
                     self.collision_count += 1
                     self.episode_collided_uavs.update((int(i), int(j)))
 
@@ -1092,7 +1100,7 @@ class PaperUAVEnv:
                 self.cumulative_energy_by_rotor_j[local_idx] += e_net
                 self.battery_pct[i] = max(
                     0.0,
-                    self.battery_pct[i] - 100.0 * e_net / self.assumed["battery_capacity_j"],
+                    self.battery_pct[i] - 100.0 * e_net / self.peer_battery_capacity_j,
                 )
             broken_mask = self._gcs_hops() < 0
         else:
@@ -1177,6 +1185,49 @@ class PaperUAVEnv:
             broken = rates < self.paper["min_comm_rate_bps"]
             direct_gcs = multihop_gcs = disconnected_gcs = 0
         rotor_battery = self.battery_pct[self.multirotor_indices] if self.n_rotor else np.array([100.0])
+        if self.peer_mode:
+            altitudes = self.positions[:, 2]
+            beliefs = np.clip(self.belief_maps, 0.0, 1.0)
+            entropy_terms = np.zeros_like(beliefs, dtype=np.float64)
+            interior = (beliefs > 0.0) & (beliefs < 1.0)
+            p_int = beliefs[interior]
+            entropy_terms[interior] = -(p_int * np.log2(p_int) + (1.0 - p_int) * np.log2(1.0 - p_int))
+            target_posteriors = []
+            for target_idx in range(self.n_targets):
+                y, x = self._target_grid_cell(target_idx)
+                target_posteriors.extend(self.belief_maps[:, y, x].tolist())
+            mean_target_posterior = float(np.mean(target_posteriors)) if target_posteriors else 0.0
+            sensing_diag = {
+                "mean_altitude_m": float(np.mean(altitudes)),
+                "min_altitude_m": float(np.min(altitudes)),
+                "max_altitude_m": float(np.max(altitudes)),
+                "mean_belief_entropy": float(np.mean(entropy_terms)),
+                "mean_target_posterior": mean_target_posterior,
+                "scanned_cells_step": int(self.last_scanned_cells_by_agent.sum()),
+                "scanned_cells_total": int(self.total_scanned_cells),
+                "positive_sensor_observations_step": int(self.last_positive_sensor_observations_by_agent.sum()),
+                "positive_sensor_observations_total": int(self.total_positive_sensor_observations),
+                "information_gain_step": float(self.last_information_gain_by_agent.sum()),
+                "information_gain_total": float(self.total_information_gain),
+                "targets_confirmed_step": int(self.last_new_targets_by_agent.sum()),
+                "targets_confirmed_total": int(self.target_found.sum()),
+            }
+        else:
+            sensing_diag = {
+                "mean_altitude_m": float(np.mean(self.positions[:, 2])) if self.n_agents else 0.0,
+                "min_altitude_m": float(np.min(self.positions[:, 2])) if self.n_agents else 0.0,
+                "max_altitude_m": float(np.max(self.positions[:, 2])) if self.n_agents else 0.0,
+                "mean_belief_entropy": 0.0,
+                "mean_target_posterior": 0.0,
+                "scanned_cells_step": 0,
+                "scanned_cells_total": 0,
+                "positive_sensor_observations_step": 0,
+                "positive_sensor_observations_total": 0,
+                "information_gain_step": 0.0,
+                "information_gain_total": 0.0,
+                "targets_confirmed_step": 0,
+                "targets_confirmed_total": int(self.target_found.sum()),
+            }
         return {
             "step": self.step_count,
             "targets_found": int(self.target_found.sum()),
@@ -1186,6 +1237,7 @@ class PaperUAVEnv:
             "total_energy_used_j": float(self.total_energy_used_j),
             "energy_consumption_pct": float(100.0 - np.mean(rotor_battery)) if self.n_rotor else 0.0,
             "avg_battery_pct": float(np.mean(rotor_battery)) if self.n_rotor else 100.0,
+            "battery_capacity_j": float(self.peer_battery_capacity_j) if self.peer_mode else float(self.assumed["battery_capacity_j"]),
             "depleted_uavs": int(np.sum(rotor_battery <= 0.0)) if self.n_rotor else 0,
             "collided_uavs": int(len(self.episode_collided_uavs)),
             "obstacle_hit_uavs": int(len(self.episode_obstacle_hit_uavs)),
@@ -1232,4 +1284,5 @@ class PaperUAVEnv:
             "total_network_attempted_bytes": int(self.total_network_attempted_bytes) if self.peer_mode else 0,
             "total_network_delivered_bytes": int(self.total_network_delivered_bytes) if self.peer_mode else 0,
             "total_network_tx_energy_j": float(self.total_network_tx_energy_j) if self.peer_mode else 0.0,
+            **sensing_diag,
         }

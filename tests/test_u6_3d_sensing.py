@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from uav_search.config import load_config
 from uav_search.envs.paper_env import PaperUAVEnv
@@ -113,3 +114,36 @@ def test_peer_observation_appends_fixed_nine_cell_belief_patch():
     patch = obs["uav_0"][-9:]
     profile = env._sensing_profile(0)
     assert np.count_nonzero(patch) == profile.fov_cells
+
+
+def test_u6_info_exposes_scalar_altitude_and_belief_sensing_diagnostics():
+    env = make_env(seed=88)
+    _, info0 = env.reset(seed=88)
+
+    expected_keys = {
+        "mean_altitude_m",
+        "min_altitude_m",
+        "max_altitude_m",
+        "mean_belief_entropy",
+        "mean_target_posterior",
+        "scanned_cells_step",
+        "scanned_cells_total",
+        "positive_sensor_observations_step",
+        "positive_sensor_observations_total",
+        "information_gain_step",
+        "information_gain_total",
+        "targets_confirmed_step",
+        "targets_confirmed_total",
+    }
+    assert expected_keys.issubset(info0)
+    assert info0["mean_belief_entropy"] == pytest.approx(1.0)
+    assert info0["mean_target_posterior"] == pytest.approx(0.5)
+    assert info0["scanned_cells_total"] == 0
+    assert info0["targets_confirmed_total"] == 0
+
+    _, _, _, _, info1 = env.step(idle_actions(env))
+    for key in expected_keys:
+        assert np.isfinite(float(info1[key]))
+    assert info1["scanned_cells_step"] > 0
+    assert info1["scanned_cells_total"] >= info1["scanned_cells_step"]
+    assert info1["information_gain_total"] >= info1["information_gain_step"] >= 0.0

@@ -48,6 +48,21 @@ def _replay_terminal_mask(
     return np.asarray([float(terminated[a]) for a in agents], dtype=np.float32)
 
 
+def _sensing_metrics_from_info(info: dict[str, Any]) -> dict[str, float | int]:
+    """Extract episode-level 3D sensing diagnostics with legacy-safe defaults."""
+    return {
+        "mean_altitude_m": float(info.get("mean_altitude_m", 0.0)),
+        "min_altitude_m": float(info.get("min_altitude_m", 0.0)),
+        "max_altitude_m": float(info.get("max_altitude_m", 0.0)),
+        "mean_belief_entropy": float(info.get("mean_belief_entropy", 0.0)),
+        "mean_target_posterior": float(info.get("mean_target_posterior", 0.0)),
+        "scanned_cells_total": int(info.get("scanned_cells_total", 0)),
+        "positive_sensor_observations_total": int(info.get("positive_sensor_observations_total", 0)),
+        "information_gain_total": float(info.get("information_gain_total", 0.0)),
+        "targets_confirmed_total": int(info.get("targets_confirmed_total", 0)),
+    }
+
+
 def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUAVEnv, dict[str, float]]:
     env = PaperUAVEnv(cfg, seed=seed)
     obs_dict, _ = env.reset(seed=seed)
@@ -93,7 +108,9 @@ def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUA
         "multihop_gcs_uavs": int(info.get("multihop_gcs_uavs", 0)),
         "disconnected_gcs_uavs": int(info.get("disconnected_gcs_uavs", 0)),
         "mean_gcs_hops": float(info.get("mean_gcs_hops", 0.0)),
+        "battery_capacity_j": float(info.get("battery_capacity_j", 0.0)),
     }
+    metrics.update(_sensing_metrics_from_info(info))
     return env, metrics
 
 
@@ -277,6 +294,7 @@ def train_experiment(
                 "multihop_gcs_uavs": int(last_info.get("multihop_gcs_uavs", 0)),
                 "disconnected_gcs_uavs": int(last_info.get("disconnected_gcs_uavs", 0)),
                 "mean_gcs_hops": float(last_info.get("mean_gcs_hops", 0.0)),
+                "battery_capacity_j": float(last_info.get("battery_capacity_j", 0.0)),
                 "critic_loss": float(latest_update.get("critic_loss", 0.0)),
                 "critic1_loss": float(latest_update.get("critic1_loss", 0.0)),
                 "critic2_loss": float(latest_update.get("critic2_loss", 0.0)),
@@ -289,6 +307,7 @@ def train_experiment(
                 "alpha": float(latest_update.get("alpha", 0.0)),
                 "alpha_loss": float(latest_update.get("alpha_loss", 0.0)),
             }
+            ep_metrics.update(_sensing_metrics_from_info(last_info))
             fixed_returns = ep_returns[env.fixed_indices] if env.fixed_indices else np.asarray([], dtype=float)
             rotor_returns = ep_returns[env.multirotor_indices] if env.multirotor_indices else np.asarray([], dtype=float)
             ep_metrics["fixed_return_mean"] = float(fixed_returns.mean()) if len(fixed_returns) else 0.0
@@ -345,6 +364,10 @@ def train_experiment(
                 "paper/broken_link_duration_s": ep_metrics["mean_broken_link_s"],
                 "swarm/episode": episode,
                 "swarm/avg_battery_pct": ep_metrics["avg_battery_pct"],
+                "swarm/battery_capacity_j": ep_metrics["battery_capacity_j"],
+                "swarm/mean_altitude_m": ep_metrics["mean_altitude_m"],
+                "swarm/min_altitude_m": ep_metrics["min_altitude_m"],
+                "swarm/max_altitude_m": ep_metrics["max_altitude_m"],
                 "swarm/depleted_uavs": ep_metrics["depleted_uavs"],
                 "swarm/collided_uavs": ep_metrics["collided_uavs"],
                 "swarm/obstacle_hit_uavs": ep_metrics["obstacle_hit_uavs"],
@@ -362,6 +385,12 @@ def train_experiment(
                 "network/disconnected_gcs_uavs": ep_metrics["disconnected_gcs_uavs"],
                 "network/mean_gcs_hops": ep_metrics["mean_gcs_hops"],
                 "network/queue_bytes_total": ep_metrics["queue_bytes_total"],
+                "sensing/mean_belief_entropy": ep_metrics["mean_belief_entropy"],
+                "sensing/mean_target_posterior": ep_metrics["mean_target_posterior"],
+                "sensing/scanned_cells_total": ep_metrics["scanned_cells_total"],
+                "sensing/positive_observations_total": ep_metrics["positive_sensor_observations_total"],
+                "sensing/information_gain_total": ep_metrics["information_gain_total"],
+                "sensing/targets_confirmed_total": ep_metrics["targets_confirmed_total"],
                 "group/episode": episode,
                 "group/fixed_return_mean": ep_metrics["fixed_return_mean"],
                 "group/rotor_return_mean": ep_metrics["rotor_return_mean"],
