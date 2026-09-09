@@ -20,11 +20,17 @@ scenario:
   uavnetsim_sinr_threshold_provenance: UAVNETSIM_DEFAULT_80211B
   uavnetsim_los_model: free_space
   uavnetsim_nlos_model: urban
-  # Explicit contact graph used by the policy-selected next-hop adapter. This is
-  # a research parameter (not published by the root paper) and needs sensitivity analysis.
+  # Reference contact range at reference RF power. Actual operational reach is
+  # power-scaled and still subjected to UavNetSim MAC/PHY/SINR.
   peer_contact_range_m: 2000.0
   gcs_contact_range_m: 2000.0
   contact_range_provenance: RESEARCH_DESIGN_CALIBRATION_REQUIRED
+  tx_power_min_w: 0.1
+  tx_power_max_w: 0.4
+  tx_power_reference_w: 0.1
+  tx_power_provenance: BUFFER_AIDED_MULTI_UAV_RELAY_REFERENCE
+  network_packet_payload_bytes: 32768
+  network_packet_payload_provenance: RESEARCH_DESIGN_SIMULATION_GRANULARITY
   targets: 10
   targets_provenance: PAPER_INFERRED
   obstacles: 6
@@ -34,25 +40,24 @@ scenario:
   # and alter the network topology instead of being trapped near initialization.
   episode_steps: 600
   episode_steps_provenance: RESEARCH_DESIGN_JTFR_JUROR_INSPIRED
-  # Peer UAVs launch together from an emergency-response staging area rather
-  # than appearing independently at random locations across the disaster map.
-  initialization: launch_disk
-  launch_center_m: [250.0, 2500.0]
-  launch_radius_m: 250.0
+  # All UAVs deploy from the same emergency GCS site but occupy separate safe
+  # launch pads so the initial state is not an artificial collision.
+  initialization: gcs_launch_pads
+  launch_radius_m: 300.0
   initial_min_separation_m: 150.0
-  initialization_provenance: RESEARCH_DESIGN
+  initialization_provenance: RESEARCH_DESIGN_COMMON_GCS_SITE
   # Fixed edge command vehicle: direct communication is useful near the staging
   # side, while exploration farther into the map naturally needs relays/SCF.
   gcs_position_m: [0.0, 2500.0, 0.0]
   gcs_position_provenance: ADAPTED_ASSUMPTION
   report_bytes: 1000000
-  report_bytes_provenance: ADAPTED_ASSUMPTION
-  buffer_bytes: 8000000
-  buffer_bytes_provenance: ADAPTED_ASSUMPTION
+  report_bytes_provenance: UAV_ASSISTED_VDTN_500KB_TO_1MB
+  buffer_bytes: 10000000
+  buffer_bytes_provenance: RESEARCH_DESIGN_LITERATURE_SENSITIVITY_BASELINE
   delivery_reward: 20.0
   delivery_reward_provenance: ADAPTED_ASSUMPTION
-  report_ttl_steps: 300
-  report_ttl_provenance: RESEARCH_DESIGN_JUROR_INSPIRED
+  report_ttl_s: 300.0
+  report_ttl_provenance: UAV_ASSISTED_VDTN_EXPLICIT
   neighbor_cache_ttl_steps: 50
   neighbor_cache_provenance: RESEARCH_DESIGN_JUROR_INSPIRED
   # Long u6 horizons must not reuse the root paper's positive residual-battery

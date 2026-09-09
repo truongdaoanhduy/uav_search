@@ -1,4 +1,6 @@
-# U6 Hybrid UavNetSim Backend Implementation Plan
+# U6 Hybrid UavNetSim Backend Implementation Plan — SUPERSEDED
+
+> Historical 2026-09-08 plan. Superseded by the 2026-09-09 persistent DTN/power-control plans; keep only for implementation history.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

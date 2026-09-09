@@ -31,7 +31,7 @@ uav_search/
 
 **`paper_env.py`** — stateful root-paper mission simulator: randomized scenario reset, fixed-wing/multi-rotor motion, target confirmation, rewards, observations, episode metrics, and trajectory history. In `u6` mode it switches to six identical peers, launch-zone deployment, local/stale Dec-POMDP peer observations, per-agent target knowledge, finite report buffers/TTL, one-hop-per-step forwarding, and direct/multi-hop/disconnected GCS diagnostics, while delegating transport outcomes to `network_backends.py`.
 
-**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the previous paper-equation peer channel for regression/ablation while honoring `u6` contact caps. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and uses its A2A path-gain model, `CsmaCa`, packet events and `Channel`; the backend, not `PaperUAVEnv`, accepts/rejects selected links. MARL still owns transmit gating, requested byte amount, and immediate next-hop selection.
+**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the previous paper-equation peer channel for regression/ablation while honoring `u6` power-scaled contact calibration. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and keeps one SimPy/channel/node set alive per episode. MARL owns transmit gating, transmit power and immediate next-hop selection; the application offers capacity-limited queued bytes. UavNetSim supplies CSMA/CA, PHY/channel delivery, native ACK/ARQ retries, delay/PDR/throughput and per-UAV radio TX energy without invoking an autonomous routing protocol that could replace the learned recipient.
 
 ## `src/uav_search/algorithms/`
 

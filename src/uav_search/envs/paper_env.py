@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 from gymnasium.spaces import Box
 
-from .models import circle_collision, communication_rate_bps, multirotor_power_w, path_gain_linear
+from .models import circle_collision, communication_rate_bps, multirotor_power_w, path_gain_linear, segment_circle_collision
 from .network_backends import NetworkStepResult, TransmissionIntent, create_network_backend
 
 
@@ -60,13 +60,18 @@ class PaperUAVEnv:
             self.peer_report_bytes = int(self.scenario.get("report_bytes", 1_000_000))
             self.peer_buffer_bytes = int(self.scenario.get("buffer_bytes", 8_000_000))
             self.peer_delivery_reward = float(self.scenario.get("delivery_reward", 20.0))
-            self.peer_report_ttl_steps = int(self.scenario.get("report_ttl_steps", 300))
+            self.peer_report_ttl_s = float(self.scenario.get("report_ttl_s", self.scenario.get("report_ttl_steps", 300) * self.dt))
             self.peer_neighbor_cache_ttl_steps = int(self.scenario.get("neighbor_cache_ttl_steps", 50))
+            self.peer_tx_power_min_w = float(self.scenario.get("tx_power_min_w", 0.1))
+            self.peer_tx_power_max_w = float(self.scenario.get("tx_power_max_w", 0.4))
+            self.peer_tx_power_reference_w = float(self.scenario.get("tx_power_reference_w", 0.1))
             self.peer_energy_cost_per_j = float(self.scenario.get("energy_cost_per_j", 0.001))
             if self.peer_report_bytes <= 0 or self.peer_buffer_bytes <= 0:
                 raise ValueError("report_bytes and buffer_bytes must be positive")
-            if self.peer_report_ttl_steps <= 0 or self.peer_neighbor_cache_ttl_steps <= 0:
-                raise ValueError("report_ttl_steps and neighbor_cache_ttl_steps must be positive")
+            if self.peer_report_ttl_s <= 0 or self.peer_neighbor_cache_ttl_steps <= 0:
+                raise ValueError("report_ttl_s and neighbor_cache_ttl_steps must be positive")
+            if not (0.0 < self.peer_tx_power_min_w <= self.peer_tx_power_max_w):
+                raise ValueError("tx_power_min_w must be positive and <= tx_power_max_w")
             self.network_backend = create_network_backend(
                 str(self.scenario.get("network_backend", "analytical")), self.cfg, seed=seed
             )
@@ -88,7 +93,9 @@ class PaperUAVEnv:
         # part of Eqs. (17)-(20).
         # Peer mode appends queue state and GCS-relative/network state while retaining
         # the root-paper observation content for the homogeneous multi-rotor agents.
-        self.peer_obs_extra_dim = 4 if self.peer_mode else 0
+        # Peer mode adds application queue/GCS-local state plus the previous
+        # hop delivery result (a local ACK-like signal, not global mission truth).
+        self.peer_obs_extra_dim = 5 if self.peer_mode else 0
         self.obs_dim = 9 + (self.n_agents - 1) * 6 + self.n_targets + self.peer_obs_extra_dim
         self.action_dim = 5 if self.peer_mode else 2
         self.observation_space = Box(-np.inf, np.inf, shape=(self.obs_dim,), dtype=np.float32)
@@ -103,6 +110,23 @@ class PaperUAVEnv:
         if not self.peer_mode or mode == "uniform_map":
             margin = float(self.assumed["uav_init_margin_m"])
             return self.rng.uniform(margin, self.area_size_m - margin, size=(self.n_agents, 2))
+        if mode == "gcs_launch_pads":
+            radius = float(self.scenario.get("launch_radius_m", 300.0))
+            min_sep = float(self.scenario.get("initial_min_separation_m", self.assumed["safety_distance_m"]))
+            if radius <= 0.0 or min_sep < 0.0:
+                raise ValueError("launch_radius_m must be positive and initial_min_separation_m non-negative")
+            # Same emergency GCS site, distinct physical pads.  With an edge GCS,
+            # a deterministic inward-facing semicircle avoids placing UAVs outside
+            # the map or colliding at reset.
+            angles = np.linspace(-math.radians(75.0), math.radians(75.0), self.n_agents)
+            points = self.gcs_position[:2] + radius * np.column_stack([np.cos(angles), np.sin(angles)])
+            if np.any(points < 0.0) or np.any(points > self.area_size_m):
+                raise ValueError("gcs_launch_pads fall outside the map; reduce launch_radius_m or move the GCS")
+            for i in range(self.n_agents):
+                for j in range(i + 1, self.n_agents):
+                    if float(np.linalg.norm(points[i] - points[j])) < min_sep:
+                        raise ValueError("gcs_launch_pads violate initial_min_separation_m")
+            return points.astype(np.float64)
         if mode != "launch_disk":
             raise ValueError(f"Unsupported scenario.initialization: {mode}")
 
@@ -154,6 +178,7 @@ class PaperUAVEnv:
                 self.velocities[self.fixed_indices, 1], self.velocities[self.fixed_indices, 0]
             )
         self.battery_pct = np.full(self.n_agents, 100.0, dtype=np.float64)
+        self.uav_active = np.ones(self.n_agents, dtype=bool)
         self.targets = self.rng.uniform(0.0, self.area_size_m, size=(self.n_targets, 2)).astype(np.float64)
         self.target_found = np.zeros(self.n_targets, dtype=bool)
         radii = self.rng.uniform(
@@ -185,6 +210,7 @@ class PaperUAVEnv:
             self.last_gcs_rates_bps = np.zeros(self.n_agents, dtype=np.float64)
             self.last_selected_tx_rate_bps = np.zeros(self.n_agents, dtype=np.float64)
             self.last_selected_tx_distance_m = np.full(self.n_agents, np.inf, dtype=np.float64)
+            self.last_selected_tx_power_w = np.zeros(self.n_agents, dtype=np.float64)
             self.last_tx_active = np.zeros(self.n_agents, dtype=bool)
             self.last_tx_success = np.zeros(self.n_agents, dtype=bool)
             self.last_delivery_reward_by_agent = np.zeros(self.n_agents, dtype=np.float64)
@@ -210,6 +236,13 @@ class PaperUAVEnv:
             self.total_network_attempted_bytes = 0
             self.total_network_delivered_bytes = 0
             self.total_network_tx_energy_j = 0.0
+            # Keep UavNetSim's per-node CSMA RNGs aligned with the episode seed.
+            # The runner intentionally changes the reset seed across episodes.
+            if hasattr(self.network_backend, "seed"):
+                self.network_backend.seed = int(self._seed)
+            reset_network = getattr(self.network_backend, "reset_episode", None)
+            if callable(reset_network):
+                reset_network(self.positions, self.gcs_position, self.obstacles)
         self._refresh_links()
         return self._observations(), self._info(step_energy_j=0.0, action_saturation=0.0)
 
@@ -296,12 +329,22 @@ class PaperUAVEnv:
 
     def _refresh_links(self) -> None:
         if self.peer_mode:
+            set_active = getattr(self.network_backend, "set_node_active", None)
+            if callable(set_active) and hasattr(self, "uav_active"):
+                set_active(self.uav_active)
             snapshot = self.network_backend.link_snapshot(
                 self.positions, self.gcs_position, getattr(self, "obstacles", None)
             )
             self.last_pair_rates_bps[:] = snapshot.pair_rates_bps
             self.last_gcs_rates_bps[:] = snapshot.gcs_rates_bps
             self.last_adjacency[:] = snapshot.adjacency
+            if hasattr(self, "uav_active"):
+                inactive = ~self.uav_active
+                self.last_pair_rates_bps[inactive, :] = 0.0
+                self.last_pair_rates_bps[:, inactive] = 0.0
+                self.last_adjacency[inactive, :] = 0
+                self.last_adjacency[:, inactive] = 0
+                self.last_gcs_rates_bps[inactive] = 0.0
             for i in range(self.n_agents):
                 best_peer = float(np.max(self.last_pair_rates_bps[:, i])) if self.n_agents > 1 else 0.0
                 self.last_rates_bps[i] = max(best_peer, float(self.last_gcs_rates_bps[i]))
@@ -379,6 +422,14 @@ class PaperUAVEnv:
             return float(self.last_adjacency[idx, leader] == 1)
         return float(np.any(self.last_adjacency[idx] > 0))
 
+    def _actor_network_state(self, idx: int) -> float:
+        """Local actor-visible connectivity flag; never exposes global GCS reachability."""
+        if self.peer_mode:
+            if hasattr(self, "uav_active") and not self.uav_active[idx]:
+                return 0.0
+            return float(self.last_gcs_rates_bps[idx] > float(self.paper["min_comm_rate_bps"]))
+        return self._network_state(idx)
+
     def _target_observation_distance(self, idx: int, target_idx: int) -> float:
         """Return normalized d_i,k only when the target is currently observable.
 
@@ -426,7 +477,7 @@ class PaperUAVEnv:
                 self.velocities[i, 1] / vmax_scale,
                 0.0,  # z-velocity is unavailable in the retained 2.5D approximation.
                 self.battery_pct[i] / 100.0 if is_rotor else 0.0,
-                self._network_state(i) if is_rotor else 0.0,
+                self._actor_network_state(i) if is_rotor else 0.0,
                 self.headings[i] / math.pi if is_fixed else 0.0,
             ]
 
@@ -442,7 +493,7 @@ class PaperUAVEnv:
                     if seen >= 0:
                         cached_pos = self.neighbor_cache_positions[i, j]
                         d_ij = float(np.linalg.norm(cached_pos - self.positions[i])) / area
-                        live_contact = bool(self.last_adjacency[i, j] or self.last_adjacency[j, i])
+                        live_contact = bool(self.last_adjacency[i, j])
                         age = max(0, int(self.step_count) - seen)
                         freshness = 1.0 if live_contact else max(
                             0.0, 1.0 - age / float(self.peer_neighbor_cache_ttl_steps)
@@ -483,6 +534,7 @@ class PaperUAVEnv:
                     float(gcs_delta[0]),
                     float(gcs_delta[1]),
                     float(self.last_gcs_rates_bps[i]) / rate_scale,
+                    float(self.last_tx_success[i]),
                 ]
 
             vec = np.asarray(own + other + target + peer_extra, dtype=np.float32)
@@ -500,6 +552,13 @@ class PaperUAVEnv:
         candidates = [j for j in range(self.n_agents) if j != sender] + [GCS_RECIPIENT]
         x = float(np.clip((float(code) + 1.0) * 0.5, 0.0, 1.0 - 1e-12))
         return int(candidates[min(int(x * len(candidates)), len(candidates) - 1)])
+
+    def _decode_tx_power_w(self, code: float) -> float:
+        """Map the continuous power action to the configured RF power interval."""
+        if not self.peer_mode:
+            raise RuntimeError("tx power decoding is only defined for homogeneous_peer scenarios")
+        x = float(np.clip((float(code) + 1.0) * 0.5, 0.0, 1.0))
+        return float(self.peer_tx_power_min_w + x * (self.peer_tx_power_max_w - self.peer_tx_power_min_w))
 
     def _enqueue_report(self, source: int, target_idx: int) -> bool:
         """Create one report when buffer space exists; otherwise keep it pending."""
@@ -529,7 +588,7 @@ class PaperUAVEnv:
             created = int(self.report_created_step[target_idx])
             if created < 0 or self.report_delivered[target_idx] or self.report_expired[target_idx]:
                 continue
-            if int(self.step_count) - created < self.peer_report_ttl_steps:
+            if (int(self.step_count) - created) * self.dt < self.peer_report_ttl_s:
                 continue
             for holder in range(self.n_agents):
                 amount = int(self.report_buffers[target_idx, holder])
@@ -544,6 +603,9 @@ class PaperUAVEnv:
         self.last_new_targets_by_agent.fill(0)
         for target_idx in range(self.n_targets):
             d = np.linalg.norm(self.positions[self.multirotor_indices, :2] - self.targets[target_idx], axis=1)
+            if self.peer_mode:
+                active_local = self.uav_active[self.multirotor_indices]
+                d = np.where(active_local, d, np.inf)
             close_local = np.flatnonzero(d <= float(self.assumed["target_found_m"]))
             for local_idx in close_local:
                 agent_idx = int(self.multirotor_indices[int(local_idx)])
@@ -566,6 +628,7 @@ class PaperUAVEnv:
         """
         self.last_selected_tx_rate_bps.fill(0.0)
         self.last_selected_tx_distance_m.fill(np.inf)
+        self.last_selected_tx_power_w.fill(0.0)
         self.last_tx_active.fill(False)
         self.last_tx_success.fill(False)
         self.last_delivery_reward_by_agent.fill(0.0)
@@ -575,11 +638,15 @@ class PaperUAVEnv:
         intents: list[TransmissionIntent] = []
         nominal_rate_bps = float(self.scenario.get("uavnetsim_bit_rate_bps", self.assumed["comm_rate_max_bps"]))
         for sender in range(self.n_agents):
+            if not self.uav_active[sender]:
+                continue
             queued_at_start = int(slot_start[:, sender].sum())
             if act[sender, 2] <= 0.0 or queued_at_start <= 0:
                 continue
             self.last_tx_active[sender] = True
             recipient = self._decode_peer_recipient(sender, float(act[sender, 4]))
+            tx_power_w = self._decode_tx_power_w(float(act[sender, 3]))
+            self.last_selected_tx_power_w[sender] = tx_power_w
             if recipient == GCS_RECIPIENT:
                 rate = float(self.last_gcs_rates_bps[sender])
                 distance_m = float(np.linalg.norm(self.positions[sender] - self.gcs_position))
@@ -587,19 +654,25 @@ class PaperUAVEnv:
             else:
                 rate = float(self.last_pair_rates_bps[recipient, sender])
                 distance_m = float(np.linalg.norm(self.positions[sender] - self.positions[recipient]))
-                receiver_room = max(0, self.peer_buffer_bytes - int(self.queue_bytes[recipient]))
+                receiver_room = max(0, self.peer_buffer_bytes - int(self.queue_bytes[recipient])) if self.uav_active[recipient] else 0
             self.last_selected_tx_rate_bps[sender] = rate
             self.last_selected_tx_distance_m[sender] = distance_m
-            fraction = float(np.clip((act[sender, 3] + 1.0) * 0.5, 0.0, 1.0))
-            # Request bytes independently of current link quality. The network backend
-            # is authoritative for deciding whether the selected transmission succeeds.
+            # tx_amount was removed: the application offers as much queued data as
+            # can fit in one nominal MAC slot; the backend decides actual delivery.
+            packet_payload_bytes = int(self.scenario.get("network_packet_payload_bytes", 32_768))
             budget = min(
-                int(nominal_rate_bps * self.dt / 8.0 * fraction),
+                int(nominal_rate_bps * self.dt / 8.0),
+                max(1, packet_payload_bytes),
                 queued_at_start,
                 receiver_room,
             )
             if budget > 0:
-                intents.append(TransmissionIntent(sender=sender, recipient=recipient, requested_bytes=budget))
+                intents.append(TransmissionIntent(
+                    sender=sender,
+                    recipient=recipient,
+                    requested_bytes=budget,
+                    tx_power_w=tx_power_w,
+                ))
 
         self.last_network_result = self.network_backend.transmit(
             intents,
@@ -748,6 +821,9 @@ class PaperUAVEnv:
         self.obstacle_hits = 0
         self.boundary_hits = 0
         previous_xy = self.positions[:, :2].copy()
+        if self.peer_mode:
+            self.uav_active &= self.battery_pct > 0.0
+            self.velocities[~self.uav_active] = 0.0
 
         # Paper Eq. (8)-(12), reduced to planar motion with fixed type altitude.
         for i in self.fixed_indices:
@@ -763,6 +839,8 @@ class PaperUAVEnv:
             self.positions[i, :2] += self.velocities[i] * self.dt
 
         for i in self.multirotor_indices:
+            if self.peer_mode and not self.uav_active[i]:
+                continue
             thrust01 = 0.5 * (motion_act[i, 0] + 1.0)
             angle = motion_act[i, 1] * math.pi
             accel = thrust01 * self.paper["max_accel_mps2"] * np.array([math.cos(angle), math.sin(angle)])
@@ -773,7 +851,12 @@ class PaperUAVEnv:
                 self.velocities[i] *= vmax / speed
                 speed = vmax
             self.positions[i, :2] += self.velocities[i] * self.dt
-            power = multirotor_power_w(speed, float(np.linalg.norm(accel)), self.cfg)
+            power = multirotor_power_w(
+                speed,
+                float(np.linalg.norm(accel)),
+                self.cfg,
+                include_communication_power=not self.peer_mode,
+            )
             e = power * self.dt
             step_energy += e
             if self.peer_mode:
@@ -789,7 +872,7 @@ class PaperUAVEnv:
         self.episode_boundary_hit_uavs.update(int(i) for i in np.flatnonzero(boundary_mask))
 
         for i in range(self.n_agents):
-            if any(circle_collision(self.positions[i, :2], c) for c in self.obstacles):
+            if any(segment_circle_collision(previous_xy[i], self.positions[i, :2], c) for c in self.obstacles):
                 self.obstacle_hits += 1
                 self.episode_obstacle_hit_uavs.add(int(i))
                 # C3 in the paper excludes the obstacle domain. Reject the candidate
@@ -803,20 +886,24 @@ class PaperUAVEnv:
                     self.collision_count += 1
                     self.episode_collided_uavs.update((int(i), int(j)))
 
+        if self.peer_mode:
+            # A UAV that exhausted its battery while moving cannot sense/relay in
+            # the same macro-step. It remains at its last position for rendering.
+            self.uav_active &= self.battery_pct > 0.0
+            self.velocities[~self.uav_active] = 0.0
         self._refresh_links()
         if self.peer_mode:
             self._expire_reports()
             self._perform_peer_target_detection()
             self._retry_pending_reports()
             self._peer_transmit(act)
-            # Charge sender-specific communication energy reported by the backend
-            # to mission battery/energy accounting. This keeps networking from
-            # being energetically free while leaving paper-faithful scenarios unchanged.
+            # Charge every UAV's radio TX energy, including native UavNetSim ACKs
+            # and retransmissions. GCS radio energy is deliberately excluded from
+            # mission battery accounting.
             network_energy_by_agent = np.zeros(self.n_agents, dtype=np.float64)
-            for outcome in self.last_network_result.outcomes:
-                sender = int(outcome.sender)
-                if 0 <= sender < self.n_agents:
-                    network_energy_by_agent[sender] += max(0.0, float(outcome.tx_energy_j))
+            for node_id, energy_j in self.last_network_result.node_tx_energy_j.items():
+                if 0 <= int(node_id) < self.n_agents:
+                    network_energy_by_agent[int(node_id)] += max(0.0, float(energy_j))
             for i in self.multirotor_indices:
                 e_net = float(network_energy_by_agent[i])
                 if e_net <= 0.0:
@@ -876,11 +963,27 @@ class PaperUAVEnv:
                     self.target_found[k] = True
 
         self.step_count += 1
+        if self.peer_mode:
+            self.uav_active &= self.battery_pct > 0.0
+            self.velocities[~self.uav_active] = 0.0
         self.trajectory.append(self.positions.copy())
-        done = self.step_count >= self.max_steps
-        terminated = {a: False for a in self.agents}
-        truncated = {a: done for a in self.agents}
+
+        mission_success = bool(self.peer_mode and self.n_targets > 0 and np.all(self.report_delivered))
+        all_depleted = bool(self.peer_mode and not np.any(self.uav_active))
+        terminated_done = mission_success or all_depleted
+        truncated_done = bool(not terminated_done and self.step_count >= self.max_steps)
+        if mission_success:
+            termination_reason = "all_reports_delivered"
+        elif all_depleted:
+            termination_reason = "all_uavs_depleted"
+        elif truncated_done:
+            termination_reason = "horizon"
+        else:
+            termination_reason = "running"
+        terminated = {a: terminated_done for a in self.agents}
+        truncated = {a: truncated_done for a in self.agents}
         info = self._info(step_energy_j=step_energy, action_saturation=action_saturation)
+        info["termination_reason"] = termination_reason
         return self._observations(), rewards, terminated, truncated, info
 
     def _info(self, step_energy_j: float, action_saturation: float) -> dict[str, Any]:
@@ -935,6 +1038,12 @@ class PaperUAVEnv:
             "disconnected_gcs_uavs": disconnected_gcs,
             "mean_gcs_hops": float(np.mean(gcs_hops[gcs_hops > 0])) if self.peer_mode and np.any(gcs_hops > 0) else 0.0,
             "network_backend": self.network_backend.name if self.peer_mode else "paper_analytical",
+            "active_uavs": int(np.sum(self.uav_active)) if self.peer_mode else self.n_agents,
+            "dead_uavs": int(np.sum(~self.uav_active)) if self.peer_mode else 0,
+            "mean_selected_tx_power_w": float(np.mean(self.last_selected_tx_power_w[self.last_tx_active])) if self.peer_mode and np.any(self.last_tx_active) else 0.0,
+            "max_selected_tx_power_w": float(np.max(self.last_selected_tx_power_w)) if self.peer_mode else 0.0,
+            "network_sim_time_s": float(getattr(self.network_backend, "simulation_time_s", 0.0)) if self.peer_mode else 0.0,
+            "network_episode_instance_id": int(getattr(self.network_backend, "episode_instance_id", 0)) if self.peer_mode else 0,
             "network_attempted_bytes": int(self.last_network_result.attempted_bytes) if self.peer_mode else 0,
             "network_delivered_bytes": int(self.last_network_result.delivered_bytes) if self.peer_mode else 0,
             "network_byte_pdr": float(self.last_network_result.byte_pdr) if self.peer_mode else 0.0,

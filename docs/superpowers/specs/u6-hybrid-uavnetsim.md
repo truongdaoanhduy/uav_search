@@ -1,4 +1,6 @@
-# U6 Hybrid UavNetSim Design
+# U6 Hybrid UavNetSim Design — SUPERSEDED
+
+> Historical 2026-09-08 design. Superseded by `2026-09-09-u6-power-dtn-persistent-network.md`, which defines the current power-aware persistent UavNetSim + native ACK/ARQ semantics.
 
 ## Goal
 

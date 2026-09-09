@@ -133,7 +133,7 @@ def test_gcs_delivery_requires_valid_paper_rate_and_reports_metric():
     assert info["bytes_transmitted"] > 0
     # u6 uses a 2 Mbps nominal link and a 1 MB report, so delivery spans
     # multiple 1-second macro-steps rather than teleporting the full report.
-    for _ in range(8):
+    for _ in range(40):
         if info["reports_delivered"] == 1:
             break
         _, _, _, _, info = env.step(actions)
@@ -162,19 +162,20 @@ def test_report_is_not_partially_created_when_buffer_cannot_hold_it():
     assert env.queue_bytes[0] == 0
 
 
-def test_zero_tx_amount_cannot_farm_positive_communication_reward():
+def test_minimum_tx_power_is_a_real_transmission_not_old_zero_amount_encoding():
     env = make_env()
     env.reset(seed=9)
     env.positions[0, :2] = env.gcs_position[:2]
     env._refresh_links()
     env._enqueue_report(0, 0)
     actions = idle_actions(env)
+    # Action coordinate 3 is now RF power; -1 maps to the configured 0.1 W minimum.
     actions["uav_0"] = np.array([-1.0, 0.0, 1.0, -1.0, 0.999], dtype=np.float32)
 
     _, _, _, _, info = env.step(actions)
 
-    assert info["bytes_transmitted"] == 0
-    assert info["reward_components_sum"]["communication"] == 0.0
+    assert env._decode_tx_power_w(-1.0) == pytest.approx(0.1)
+    assert info["bytes_transmitted"] > 0
 
 
 def test_u6_defaults_to_uavnetsim_backend():
@@ -234,15 +235,15 @@ def test_u6_research_scenario_uses_edge_gcs_and_longer_horizon_only_for_u6():
     assert legacy_env.max_steps == 50
 
 
-def test_u6_launch_zone_initialization_is_seeded_local_and_safely_separated():
+def test_u6_launch_zone_initialization_uses_safe_common_gcs_launch_pads():
     env = make_env(seed=44)
     env.reset(seed=44)
-    center = np.asarray(env.scenario["launch_center_m"], dtype=float)
     radius = float(env.scenario["launch_radius_m"])
     min_sep = float(env.scenario["initial_min_separation_m"])
 
-    radial = np.linalg.norm(env.positions[:, :2] - center[None, :], axis=1)
+    radial = np.linalg.norm(env.positions[:, :2] - env.gcs_position[:2][None, :], axis=1)
     assert np.all(radial <= radius + 1e-9)
+    assert np.all(env.positions[:, 0] >= env.gcs_position[0] - 1e-9)
     for i in range(env.n_agents):
         for j in range(i + 1, env.n_agents):
             assert np.linalg.norm(env.positions[i, :2] - env.positions[j, :2]) >= min_sep - 1e-9
@@ -379,7 +380,7 @@ def test_u6_runtime_step_override_takes_precedence_over_research_default():
 def test_generated_report_expires_after_ttl_and_frees_buffer():
     cfg = load_config("masac", "u6")
     cfg["scenario"]["network_backend"] = "analytical"
-    cfg["scenario"]["report_ttl_steps"] = 2
+    cfg["scenario"]["report_ttl_s"] = 2.0
     env = PaperUAVEnv(cfg, seed=26)
     env.reset(seed=26)
     env._enqueue_report(0, 0)
@@ -458,3 +459,52 @@ def test_network_tx_energy_reduces_sender_battery_in_u6():
     assert tx_env.last_network_result.tx_energy_j > 0.0
     assert tx_env.last_energy_by_agent_j[0] > idle_env.last_energy_by_agent_j[0]
     assert tx_env.battery_pct[0] < idle_env.battery_pct[0]
+
+
+def test_uavnetsim_ack_energy_reduces_receiver_battery():
+    import importlib.util
+
+    if importlib.util.find_spec("simpy") is None or importlib.util.find_spec("phy.channel") is None:
+        pytest.skip("pinned UavNetSim optional dependency is not installed")
+
+    cfg = load_config("masac", "u6")
+    tx_env = PaperUAVEnv(cfg, seed=93)
+    idle_env = PaperUAVEnv(cfg, seed=93)
+    for env in (tx_env, idle_env):
+        env.reset(seed=93)
+        env.positions[:, :2] = np.array(
+            [[100.0, 100.0], [150.0, 100.0], [4500.0, 4500.0],
+             [4600.0, 4500.0], [4500.0, 4600.0], [4600.0, 4600.0]],
+            dtype=float,
+        )
+        env.gcs_position = np.array([200.0, 100.0, 0.0])
+        env.targets[:] = [4000.0, 4000.0]
+        env.obstacles[:, :2] = [4900.0, 4900.0]
+        env.obstacles[:, 2] = 10.0
+        env._refresh_links()
+        env._enqueue_report(0, 0)
+
+    tx_actions = idle_actions(tx_env)
+    # Sender 0: gate on, minimum RF power, first recipient bin -> UAV 1.
+    tx_actions["uav_0"] = np.array([-1.0, 0.0, 1.0, -1.0, -1.0], dtype=np.float32)
+    tx_env.step(tx_actions)
+    idle_env.step(idle_actions(idle_env))
+
+    assert tx_env.last_network_result.delivered_bytes > 0
+    assert tx_env.last_network_result.node_tx_energy_j[1] > 0.0
+    assert tx_env.last_energy_by_agent_j[1] > idle_env.last_energy_by_agent_j[1]
+    assert tx_env.battery_pct[1] < idle_env.battery_pct[1]
+
+
+def test_u6_reset_seed_is_forwarded_to_uavnetsim_backend():
+    import importlib.util
+
+    if importlib.util.find_spec("simpy") is None or importlib.util.find_spec("phy.channel") is None:
+        pytest.skip("pinned UavNetSim optional dependency is not installed")
+
+    cfg = load_config("masac", "u6")
+    env = PaperUAVEnv(cfg, seed=44)
+    env.reset(seed=101)
+    assert env.network_backend.seed == 101
+    env.reset(seed=202)
+    assert env.network_backend.seed == 202
