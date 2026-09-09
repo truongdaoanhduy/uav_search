@@ -479,6 +479,33 @@ class UavNetSimBackend:
         key = "gcs_contact_range_m" if gcs else "peer_contact_range_m"
         return float(self._setting(key, float("inf")))
 
+    def _effective_contact_range_m(self, tx_power_w: float, *, gcs: bool = False) -> float:
+        """Return the configured reference range scaled by transmit power.
+
+        The scenario defines contact range at ``tx_power_reference_w``.  Under
+        the adopted free-space calibration, operational reach scales with the
+        square root of transmit power; UavNetSim still decides MAC/PHY success
+        for attempts that are inside this operational envelope.
+        """
+        base = self._contact_range_m(gcs=gcs)
+        reference = max(
+            float(self.scenario.get("tx_power_reference_w", self._setting("uavnetsim_tx_power_w", 0.1))),
+            1e-12,
+        )
+        # Operational reach is defined over the policy's configured action range.
+        # Tests may inject sub-minimum power to exercise native PHY/ARQ failure;
+        # keep those attempts inside the minimum-power contact envelope so the
+        # real MAC/PHY stack, rather than the geometry guard, resolves failure.
+        minimum = max(float(self.scenario.get("tx_power_min_w", reference)), 0.0)
+        range_power = max(float(tx_power_w), minimum)
+        return float(base * np.sqrt(range_power / reference))
+
+    @staticmethod
+    def _advance_episode_time(simulator: Any, dt_s: float) -> None:
+        if float(dt_s) <= 0.0:
+            return
+        simulator.env.run(until=float(simulator.env.now) + float(dt_s) * 1e6)
+
     def _radio_parameters(self) -> dict[str, float | str]:
         ref = self.cfg.get("reference_backed", {})
         ucfg = self._modules["config"]
@@ -698,7 +725,7 @@ class UavNetSimBackend:
     ) -> NetworkStepResult:
         intents = [intent for intent in intents if int(intent.requested_bytes) > 0]
         attempted = int(sum(int(intent.requested_bytes) for intent in intents))
-        if not intents or dt_s <= 0.0:
+        if dt_s <= 0.0:
             return NetworkStepResult(attempted_bytes=attempted)
 
         DataPacket = self._modules["packet"].DataPacket
@@ -708,6 +735,9 @@ class UavNetSimBackend:
         gcs_id = n_agents
         simulator = self._update_episode_geometry(positions, gcs_position, obstacles)
         env = simulator.env
+        if not intents:
+            self._advance_episode_time(simulator, dt_s)
+            return NetworkStepResult(attempted_bytes=0)
         event_bus = simulator.event_bus
         metrics = simulator.metrics
         valid_intents: list[TransmissionIntent] = []
@@ -737,14 +767,20 @@ class UavNetSimBackend:
                     sender, recipient, int(intent.requested_bytes), 0, 0.0, distance
                 ))
                 continue
+            if distance > self._effective_contact_range_m(tx_power, gcs=(recipient == GCS_NODE)):
+                prefailed.append(TransmissionOutcome(
+                    sender, recipient, int(intent.requested_bytes), 0, 0.0, distance
+                ))
+                continue
             gain = self._gain(positions[sender], endpoint, airspace)
             sinr_db = 10.0 * np.log10(tx_power * gain / noise_w) if tx_power > 0.0 else -200.0
             rate = float(params["BIT_RATE"]) if sinr_db >= float(params["SINR_THRESHOLD_DB"]) else 0.0
-            # Do not suppress a physically poor attempt before UavNetSim sees it:
-            # a selected low-power/far transmission still spends airtime/energy.
+            # Inside the configured operational envelope, let UavNetSim see even
+            # a PHY-poor attempt so MAC/ARQ airtime and radio energy stay native.
             valid_intents.append(intent)
 
         if not valid_intents:
+            self._advance_episode_time(simulator, dt_s)
             return NetworkStepResult(
                 outcomes=prefailed,
                 attempted_bytes=attempted,

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -98,3 +99,51 @@ def test_wandb_update_metrics_are_throttled_to_every_100_updates(monkeypatch, tm
     assert "group/fixed_return_mean" in episode_payload
     assert "group/rotor_return_mean" in episode_payload
     assert not any("/agent/" in key or "worst_agent" in key for key in episode_payload)
+
+
+def test_deterministic_rollout_stops_on_terminated(monkeypatch):
+    import uav_search.runner.train as train_module
+
+    class FakeEnv:
+        def __init__(self, cfg, seed):
+            self.agents = ["uav_0", "uav_1"]
+            self.n_agents = 2
+            self.max_steps = 5
+            self.total_energy_used_j = 0.0
+            self.step_calls = 0
+
+        def reset(self, seed=None):
+            obs = {agent: np.zeros(3, dtype=np.float32) for agent in self.agents}
+            return obs, {}
+
+        def step(self, action_dict):
+            self.step_calls += 1
+            obs = {agent: np.zeros(3, dtype=np.float32) for agent in self.agents}
+            rewards = {agent: 1.0 for agent in self.agents}
+            terminated = {agent: True for agent in self.agents}
+            truncated = {agent: False for agent in self.agents}
+            info = {"mean_comm_rate_mbps": 0.0, "action_saturation": 0.0}
+            return obs, rewards, terminated, truncated, info
+
+    class FakeAlgo:
+        def act(self, obs, explore=False):
+            return np.zeros((2, 1), dtype=np.float32)
+
+    monkeypatch.setattr(train_module, "PaperUAVEnv", FakeEnv)
+    env, metrics = train_module.deterministic_rollout(FakeAlgo(), {}, seed=44)
+
+    assert env.step_calls == 1
+    assert metrics["return_sum"] == pytest.approx(2.0)
+
+
+def test_replay_terminal_mask_bootstraps_across_time_limit_truncation():
+    import uav_search.runner.train as train_module
+
+    agents = ["uav_0", "uav_1"]
+    terminated = {"uav_0": False, "uav_1": True}
+    truncated = {"uav_0": True, "uav_1": False}
+
+    mask = train_module._replay_terminal_mask(terminated, agents)
+
+    # Time-limit truncation ends rollout collection but must still bootstrap Q.
+    np.testing.assert_array_equal(mask, np.array([0.0, 1.0], dtype=np.float32))

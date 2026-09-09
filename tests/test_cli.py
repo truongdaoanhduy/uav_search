@@ -60,3 +60,25 @@ def test_check_system_describes_deterministic_paper_default():
     )
     assert "Deterministic paper runs are the default" in proc.stdout
     assert "Use --deterministic only" not in proc.stdout
+
+
+def test_seed_defaults_are_44_across_generic_training_entrypoints():
+    import importlib.util
+    import inspect
+    import uav_search.runner.train as train_module
+
+    def load_script(name):
+        spec = importlib.util.spec_from_file_location(f"test_{name}", ROOT / "scripts" / name)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        return module
+
+    train_script = load_script("train.py")
+    run_all_script = load_script("run_all.py")
+    train_args = train_script.build_parser().parse_args(["--algorithm", "masac", "--scenario", "u6"])
+    run_all_args = run_all_script.build_parser().parse_args([])
+
+    assert train_args.seed == 44
+    assert run_all_args.seed == 44
+    assert inspect.signature(train_module.train_experiment).parameters["seed"].default == 44

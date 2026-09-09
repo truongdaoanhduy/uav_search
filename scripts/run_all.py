@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--eval-episodes", type=int, default=None,
         help="Evaluation cases per run. Default: 5000 for 50k-episode paper runs, otherwise 10 for development.",
     )
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--seed", type=int, default=44)
     p.add_argument("--device", default="auto")
     p.add_argument("--amp", choices=["auto", "on", "off"], default="auto")
     p.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True, help="Deterministic same-seed paper runs by default; use --no-deterministic for maximum speed")

@@ -169,3 +169,58 @@ def test_uavnetsim_uses_one_persistent_clock_per_episode_when_dependency_availab
     assert backend.episode_instance_id == episode_id
     assert t1 == pytest.approx(1.0)
     assert backend.simulation_time_s == pytest.approx(2.0)
+
+
+def test_uavnetsim_idle_macro_step_advances_persistent_clock_when_dependency_available():
+    import importlib.util
+
+    if importlib.util.find_spec("simpy") is None or importlib.util.find_spec("phy.channel") is None:
+        pytest.skip("pinned UavNetSim optional dependency is not installed")
+    cfg = deepcopy(load_config("masac", "u6"))
+    backend = UavNetSimBackend(cfg, seed=90)
+    positions = np.array(
+        [[100.0, 100.0, 60.0], [150.0, 100.0, 60.0], [4500.0, 4500.0, 60.0],
+         [4600.0, 4500.0, 60.0], [4500.0, 4600.0, 60.0], [4600.0, 4600.0, 60.0]],
+        dtype=float,
+    )
+    gcs = np.array([200.0, 100.0, 0.0])
+    empty = np.empty((0, 3))
+    backend.reset_episode(positions, gcs, empty)
+    episode_id = backend.episode_instance_id
+
+    result = backend.transmit([], positions, gcs, empty, dt_s=1.0, step_index=0)
+
+    assert result.attempted_bytes == 0
+    assert backend.episode_instance_id == episode_id
+    assert backend.simulation_time_s == pytest.approx(1.0)
+
+
+def test_uavnetsim_reference_contact_range_matches_reference_power_transmission_when_dependency_available():
+    import importlib.util
+
+    if importlib.util.find_spec("simpy") is None or importlib.util.find_spec("phy.channel") is None:
+        pytest.skip("pinned UavNetSim optional dependency is not installed")
+    cfg = deepcopy(load_config("masac", "u6"))
+    backend = UavNetSimBackend(cfg, seed=91)
+    positions = np.array(
+        [[100.0, 100.0, 60.0], [2600.0, 100.0, 60.0], [4500.0, 4500.0, 60.0],
+         [4600.0, 4500.0, 60.0], [4500.0, 4600.0, 60.0], [4600.0, 4600.0, 60.0]],
+        dtype=float,
+    )
+    gcs = np.array([0.0, 100.0, 0.0])
+    empty = np.empty((0, 3))
+    snapshot = backend.link_snapshot(positions, gcs, empty)
+    assert np.linalg.norm(positions[1] - positions[0]) > cfg["scenario"]["peer_contact_range_m"]
+    assert snapshot.adjacency[1, 0] == 0
+
+    low = backend.transmit(
+        [TransmissionIntent(0, 1, 1000, tx_power_w=0.1)], positions, gcs, empty,
+        dt_s=1.0, step_index=0,
+    )
+    high = backend.transmit(
+        [TransmissionIntent(0, 1, 1000, tx_power_w=0.4)], positions, gcs, empty,
+        dt_s=1.0, step_index=1,
+    )
+
+    assert low.delivered_bytes == 0
+    assert high.delivered_bytes > 0

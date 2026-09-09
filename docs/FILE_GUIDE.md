@@ -53,6 +53,8 @@ uav_search/
 
 **`train.py`** — experiment orchestration: seeds, env → policy → replay → update loop, best/final/crash checkpoint, episode/update metrics, post-training deterministic rollout, summary and plot generation.
 
+**`network_calibration.py`** — non-learning `u6` calibration runner. It drives deterministic-by-seed random-waypoint motion through the real UavNetSim backend and aggregates direct/multi-hop/disconnected node-step fractions, GCS hops, neighbor degree, and optional traffic metrics across seeds/ranges.
+
 **`evaluate.py`** — reload a checkpoint and evaluate it over arbitrary random test cases.
 
 **`logging.py`** — CSV logging, traceback context, and low-episode diagnostics.
@@ -70,6 +72,8 @@ uav_search/
 **`run_all.py`** — run exactly the requested 3 algorithms across the current paper-reproduction scenario set.
 
 **`run_u6.py`** — run MASAC, MATD3 and MADDPG sequentially on the homogeneous `u6` joint search/networking scenario; default deterministic seed is 44.
+
+**`calibrate_u6_network.py`** — run the Phase-B no-learning topology calibration grid with real UavNetSim; defaults to 50 seeds × 600 steps over 1.0/1.5/2.0/2.5 km reference ranges and writes CSV/JSON under `runs/`. Use `--traffic` only when packet-level PDR/delay/energy calibration is desired.
 
 **`evaluate.py`** — multi-case checkpoint evaluation.
 

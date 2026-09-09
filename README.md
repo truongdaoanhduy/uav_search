@@ -52,6 +52,14 @@ Run the requested three baselines on `u6` with one command:
 python scripts/run_u6.py --episodes 10 --device auto --amp auto --seed 44 --local-only
 ```
 
+Calibrate the `u6` network topology before large training runs (no learning; real UavNetSim):
+
+```bash
+python scripts/calibrate_u6_network.py --ranges 1000 1500 2000 2500 --seed-start 44 --num-seeds 50 --steps 600
+```
+
+The `--ranges` values are **reference peer/GCS contact ranges in meters at 0.1 W** (the current `tx_power_reference_w`); they are not sensing ranges or action ranges. The default calibration is topology-only so range/GCS geometry is not confounded by packet load, and traffic-only metrics such as PDR are reported as `n/a`. Add `--traffic` for the separate packet-level PDR/delay/energy check; `--tx-power-w` applies to that traffic policy. Outputs are written as per-episode CSV plus aggregate JSON under `runs/calibration/`.
+
 Target detection and mission delivery are separate: detection creates (or queues creation of) a finite-buffer TargetReport, while mission delivery is counted only when report bytes reach the GCS. Reports have TTL, relay forwarding is limited to one application-level hop per RL macro-step, and `info` includes direct/multi-hop/disconnected-to-GCS counts, queue/expiry metrics, network byte PDR, throughput, mean delay, PHY failures, and network transmit energy. There is **no charging** in `u6`: once a UAV battery reaches zero it is permanently disabled for motion, sensing, TX, RX and relaying for the rest of the episode. The legacy `f1_m5`/`f1_m9` paths remain on the original paper simulator and are not switched to UavNetSim.
 
 ## Train CPU

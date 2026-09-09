@@ -13,7 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scenario", choices=ALL_SCENARIOS, required=True)
     p.add_argument("--episodes", type=int, default=None, help="Override training episodes; paper reference is 50,000")
     p.add_argument("--steps", type=int, default=None, help="Development-only override; paper value is 50 steps/episode")
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--seed", type=int, default=44)
     p.add_argument("--device", default="auto", help="auto, cpu, cuda, cuda:0, ...")
     p.add_argument("--amp", choices=["auto", "on", "off"], default="auto", help="Mixed precision policy for CUDA")
     p.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True, help="Deterministic same-seed paper runs by default; use --no-deterministic for maximum speed")

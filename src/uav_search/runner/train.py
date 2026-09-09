@@ -36,6 +36,18 @@ def _obs_array(obs_dict: dict[str, np.ndarray], agents: list[str]) -> np.ndarray
     return np.stack([obs_dict[a] for a in agents], axis=0).astype(np.float32)
 
 
+def _replay_terminal_mask(
+    terminated: dict[str, bool],
+    agents: list[str],
+) -> np.ndarray:
+    """Return replay bootstrap stops: only true MDP termination cuts the target.
+
+    Truncation still ends rollout collection, but a time-limit transition keeps
+    bootstrapping from the next observation according to Gymnasium's step API.
+    """
+    return np.asarray([float(terminated[a]) for a in agents], dtype=np.float32)
+
+
 def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUAVEnv, dict[str, float]]:
     env = PaperUAVEnv(cfg, seed=seed)
     obs_dict, _ = env.reset(seed=seed)
@@ -47,12 +59,12 @@ def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUA
     for _ in range(env.max_steps):
         action = algo.act(obs, explore=False)
         action_dict = {a: action[i] for i, a in enumerate(env.agents)}
-        next_dict, reward_dict, _, truncated, info = env.step(action_dict)
+        next_dict, reward_dict, terminated, truncated, info = env.step(action_dict)
         returns += np.asarray([reward_dict[a] for a in env.agents], dtype=np.float64)
         comm_rates.append(float(info["mean_comm_rate_mbps"]))
         saturations.append(float(info["action_saturation"]))
         obs = _obs_array(next_dict, env.agents)
-        if all(truncated.values()):
+        if all(truncated.values()) or all(terminated.values()):
             break
     metrics = {
         "return_mean": float(returns.mean()),
@@ -90,7 +102,7 @@ def train_experiment(
     scenario: str,
     episodes: int | None = None,
     steps: int | None = None,
-    seed: int = 0,
+    seed: int = 44,
     device: str = "auto",
     output_root: str | Path = "runs",
     wandb: bool | None = None,
@@ -198,9 +210,8 @@ def train_experiment(
                 next_dict, reward_dict, terminated, truncated, last_info = env.step(action_dict)
                 next_obs = _obs_array(next_dict, env.agents)
                 rewards = np.asarray([reward_dict[a] for a in env.agents], dtype=np.float32)
-                dones = np.asarray(
-                    [float(terminated[a] or truncated[a]) for a in env.agents], dtype=np.float32
-                )
+                # Truncation stops collection below but must not suppress Q bootstrapping.
+                dones = _replay_terminal_mask(terminated, env.agents)
                 algo.store(obs, action, rewards, next_obs, dones)
                 ep_returns += rewards
                 obs = next_obs
