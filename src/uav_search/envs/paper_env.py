@@ -66,6 +66,20 @@ class PaperUAVEnv:
             self.peer_tx_power_max_w = float(self.scenario.get("tx_power_max_w", 0.4))
             self.peer_tx_power_reference_w = float(self.scenario.get("tx_power_reference_w", 0.1))
             self.peer_energy_cost_per_j = float(self.scenario.get("energy_cost_per_j", 0.001))
+            self.peer_altitude_min_m = float(self.scenario.get("altitude_min_m", self.assumed["multirotor_altitude_m"]))
+            self.peer_altitude_max_m = float(self.scenario.get("altitude_max_m", self.assumed["multirotor_altitude_m"]))
+            self.peer_altitude_levels_m = np.asarray(
+                self.scenario.get("altitude_levels_m", [self.assumed["multirotor_altitude_m"]]),
+                dtype=np.float64,
+            )
+            if self.peer_altitude_levels_m.ndim != 1 or self.peer_altitude_levels_m.size == 0:
+                raise ValueError("altitude_levels_m must be a non-empty 1-D sequence")
+            if not self.peer_altitude_min_m <= self.peer_altitude_max_m:
+                raise ValueError("altitude_min_m must be <= altitude_max_m")
+            if np.any(self.peer_altitude_levels_m < self.peer_altitude_min_m) or np.any(
+                self.peer_altitude_levels_m > self.peer_altitude_max_m
+            ):
+                raise ValueError("all altitude_levels_m must lie within altitude_min_m/altitude_max_m")
             if self.peer_report_bytes <= 0 or self.peer_buffer_bytes <= 0:
                 raise ValueError("report_bytes and buffer_bytes must be positive")
             if self.peer_report_ttl_s <= 0 or self.peer_neighbor_cache_ttl_steps <= 0:
@@ -97,7 +111,7 @@ class PaperUAVEnv:
         # hop delivery result (a local ACK-like signal, not global mission truth).
         self.peer_obs_extra_dim = 5 if self.peer_mode else 0
         self.obs_dim = 9 + (self.n_agents - 1) * 6 + self.n_targets + self.peer_obs_extra_dim
-        self.action_dim = 5 if self.peer_mode else 2
+        self.action_dim = 6 if self.peer_mode else 2
         self.observation_space = Box(-np.inf, np.inf, shape=(self.obs_dim,), dtype=np.float32)
         self.action_space = Box(-1.0, 1.0, shape=(self.action_dim,), dtype=np.float32)
         self.rng = np.random.default_rng(seed)
@@ -165,8 +179,15 @@ class PaperUAVEnv:
         # research adaptation can instead launch the peer swarm from a common base.
         self.positions[:, :2] = self._sample_initial_uav_xy()
         self.positions[self.fixed_indices, 2] = self.assumed["fixed_altitude_m"]
-        self.positions[self.multirotor_indices, 2] = self.assumed["multirotor_altitude_m"]
-        self.velocities = np.zeros((self.n_agents, 2), dtype=np.float64)
+        if self.peer_mode:
+            self.positions[self.multirotor_indices, 2] = self.rng.choice(
+                self.peer_altitude_levels_m, size=self.n_rotor, replace=True
+            )
+        else:
+            self.positions[self.multirotor_indices, 2] = self.assumed["multirotor_altitude_m"]
+        # A common 3-D velocity layout keeps paper scenarios backward compatible
+        # (their z velocity stays zero) while allowing u6 to climb/descend.
+        self.velocities = np.zeros((self.n_agents, 3), dtype=np.float64)
         if self.n_fixed:
             heading0 = self.rng.uniform(-math.pi, math.pi, size=self.n_fixed)
             v0 = self.paper["fixed_speed_min_mps"]
@@ -475,7 +496,7 @@ class PaperUAVEnv:
                 self.positions[i, 2] / area,
                 self.velocities[i, 0] / vmax_scale,
                 self.velocities[i, 1] / vmax_scale,
-                0.0,  # z-velocity is unavailable in the retained 2.5D approximation.
+                self.velocities[i, 2] / vmax_scale if self.peer_mode else 0.0,
                 self.battery_pct[i] / 100.0 if is_rotor else 0.0,
                 self._actor_network_state(i) if is_rotor else 0.0,
                 self.headings[i] / math.pi if is_fixed else 0.0,
@@ -641,11 +662,11 @@ class PaperUAVEnv:
             if not self.uav_active[sender]:
                 continue
             queued_at_start = int(slot_start[:, sender].sum())
-            if act[sender, 2] <= 0.0 or queued_at_start <= 0:
+            if act[sender, 3] <= 0.0 or queued_at_start <= 0:
                 continue
             self.last_tx_active[sender] = True
-            recipient = self._decode_peer_recipient(sender, float(act[sender, 4]))
-            tx_power_w = self._decode_tx_power_w(float(act[sender, 3]))
+            recipient = self._decode_peer_recipient(sender, float(act[sender, 5]))
+            tx_power_w = self._decode_tx_power_w(float(act[sender, 4]))
             self.last_selected_tx_power_w[sender] = tx_power_w
             if recipient == GCS_RECIPIENT:
                 rate = float(self.last_gcs_rates_bps[sender])
@@ -820,7 +841,8 @@ class PaperUAVEnv:
         self.collision_count = 0
         self.obstacle_hits = 0
         self.boundary_hits = 0
-        previous_xy = self.positions[:, :2].copy()
+        previous_positions = self.positions.copy()
+        previous_xy = previous_positions[:, :2]
         if self.peer_mode:
             self.uav_active &= self.battery_pct > 0.0
             self.velocities[~self.uav_active] = 0.0
@@ -835,22 +857,30 @@ class PaperUAVEnv:
             )
             delta_v = np.clip(target_speed - speed, -self.paper["max_accel_mps2"] * self.dt, self.paper["max_accel_mps2"] * self.dt)
             speed = np.clip(speed + delta_v, self.paper["fixed_speed_min_mps"], self.paper["fixed_speed_max_mps"])
-            self.velocities[i] = speed * np.array([math.cos(self.headings[i]), math.sin(self.headings[i])])
-            self.positions[i, :2] += self.velocities[i] * self.dt
+            self.velocities[i, :2] = speed * np.array([math.cos(self.headings[i]), math.sin(self.headings[i])])
+            self.velocities[i, 2] = 0.0
+            self.positions[i, :2] += self.velocities[i, :2] * self.dt
 
         for i in self.multirotor_indices:
             if self.peer_mode and not self.uav_active[i]:
                 continue
             thrust01 = 0.5 * (motion_act[i, 0] + 1.0)
             angle = motion_act[i, 1] * math.pi
-            accel = thrust01 * self.paper["max_accel_mps2"] * np.array([math.cos(angle), math.sin(angle)])
+            horizontal_accel = thrust01 * self.paper["max_accel_mps2"] * np.array(
+                [math.cos(angle), math.sin(angle)], dtype=np.float64
+            )
+            vertical_accel = float(act[i, 2] * self.paper["max_accel_mps2"]) if self.peer_mode else 0.0
+            accel = np.array([horizontal_accel[0], horizontal_accel[1], vertical_accel], dtype=np.float64)
             self.velocities[i] += accel * self.dt
             speed = float(np.linalg.norm(self.velocities[i]))
             vmax = self.paper["multirotor_speed_max_mps"]
             if speed > vmax:
                 self.velocities[i] *= vmax / speed
                 speed = vmax
-            self.positions[i, :2] += self.velocities[i] * self.dt
+            if self.peer_mode:
+                self.positions[i] += self.velocities[i] * self.dt
+            else:
+                self.positions[i, :2] += self.velocities[i, :2] * self.dt
             power = multirotor_power_w(
                 speed,
                 float(np.linalg.norm(accel)),
@@ -865,9 +895,21 @@ class PaperUAVEnv:
             self.cumulative_energy_by_rotor_j[local_idx] += e
             self.battery_pct[i] = max(0.0, self.battery_pct[i] - 100.0 * e / self.assumed["battery_capacity_j"])
 
-        before_clip = self.positions[:, :2].copy()
+        before_clip_xy = self.positions[:, :2].copy()
         self.positions[:, :2] = np.clip(self.positions[:, :2], 0.0, self.area_size_m)
-        boundary_mask = np.any(np.abs(before_clip - self.positions[:, :2]) > 1e-9, axis=1)
+        boundary_mask = np.any(np.abs(before_clip_xy - self.positions[:, :2]) > 1e-9, axis=1)
+        if self.peer_mode:
+            before_clip_z = self.positions[:, 2].copy()
+            self.positions[:, 2] = np.clip(
+                self.positions[:, 2], self.peer_altitude_min_m, self.peer_altitude_max_m
+            )
+            boundary_mask |= np.abs(before_clip_z - self.positions[:, 2]) > 1e-9
+            # Prevent a saturated vertical velocity from repeatedly pushing into
+            # the altitude boundary on every later step.
+            at_floor = self.positions[:, 2] <= self.peer_altitude_min_m + 1e-9
+            at_ceiling = self.positions[:, 2] >= self.peer_altitude_max_m - 1e-9
+            self.velocities[at_floor & (self.velocities[:, 2] < 0.0), 2] = 0.0
+            self.velocities[at_ceiling & (self.velocities[:, 2] > 0.0), 2] = 0.0
         self.boundary_hits = int(np.sum(boundary_mask))
         self.episode_boundary_hit_uavs.update(int(i) for i in np.flatnonzero(boundary_mask))
 
@@ -877,7 +919,10 @@ class PaperUAVEnv:
                 self.episode_obstacle_hit_uavs.add(int(i))
                 # C3 in the paper excludes the obstacle domain. Reject the candidate
                 # displacement rather than adding an unpublished reward penalty.
-                self.positions[i, :2] = previous_xy[i]
+                if self.peer_mode:
+                    self.positions[i] = previous_positions[i]
+                else:
+                    self.positions[i, :2] = previous_xy[i]
                 if i in self.multirotor_indices:
                     self.velocities[i] = 0.0
         for i in range(self.n_agents):

@@ -15,7 +15,7 @@ def analytical_u6(seed=44):
 
 def idle_actions(env):
     # Dimension 3 is tx_power after the refactor; gate is OFF here.
-    return {a: np.array([-1.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
+    return {a: np.array([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
 
 
 def test_u6_config_uses_literature_backed_report_lifetime_and_power_contract():
@@ -46,7 +46,7 @@ def test_motion_segment_cannot_tunnel_through_circular_obstacle():
     env = analytical_u6(seed=45)
     env.reset(seed=45)
     env.positions[0, :2] = [100.0, 100.0]
-    env.velocities[0] = [10.0, 0.0]
+    env.velocities[0, :2] = [10.0, 0.0]
     env.obstacles[:, :2] = [4900.0, 4900.0]
     env.obstacles[:, 2] = 1.0
     env.obstacles[0] = [105.0, 100.0, 1.0]
@@ -62,7 +62,7 @@ def test_depleted_uav_is_disabled_and_cannot_move():
     env = analytical_u6(seed=46)
     env.reset(seed=46)
     env.positions[0, :2] = [1000.0, 1000.0]
-    env.velocities[0] = [10.0, 0.0]
+    env.velocities[0, :2] = [10.0, 0.0]
     env.battery_pct[0] = 0.0
     start = env.positions[0].copy()
 
@@ -70,7 +70,7 @@ def test_depleted_uav_is_disabled_and_cannot_move():
 
     assert not env.uav_active[0]
     np.testing.assert_allclose(env.positions[0], start)
-    np.testing.assert_allclose(env.velocities[0], [0.0, 0.0])
+    np.testing.assert_allclose(env.velocities[0], [0.0, 0.0, 0.0])
 
 
 def test_depleted_uav_cannot_detect_new_target():
@@ -223,7 +223,7 @@ def test_tx_power_slot_no_longer_controls_byte_fraction():
     env._enqueue_report(0, 0)
     actions = idle_actions(env)
     # Gate ON, minimum configured power, GCS recipient.
-    actions["uav_0"] = np.array([-1.0, 0.0, 1.0, -1.0, 0.999], dtype=np.float32)
+    actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, -1.0, 0.999], dtype=np.float32)
 
     _, _, _, _, info = env.step(actions)
 

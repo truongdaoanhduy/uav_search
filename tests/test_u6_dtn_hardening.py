@@ -18,7 +18,7 @@ def make_env(seed: int = 44) -> PaperUAVEnv:
 
 
 def idle_actions(env: PaperUAVEnv):
-    return {a: np.array([-1.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
+    return {a: np.array([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
 
 
 def test_u6_literature_backed_report_buffer_lifetime_and_power_defaults():
@@ -95,7 +95,7 @@ def test_depleted_uav_is_disabled_for_motion_sensing_and_networking():
     env.targets[0] = env.positions[0, :2]
     start = env.positions[0].copy()
     actions = idle_actions(env)
-    actions["uav_0"] = np.array([1.0, 1.0, 1.0, 1.0, 0.999], dtype=np.float32)
+    actions["uav_0"] = np.array([1.0, 1.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32)
     env.step(actions)
     np.testing.assert_allclose(env.positions[0], start)
     assert not env.target_known_by_agent[0, 0]

@@ -5,6 +5,14 @@ scenario:
   fixed_wing: 0
   multirotor: 6
   num_uavs: 6
+  # Full-3D research adaptation. MRMG publishes a 50--150 m UAV altitude
+  # interval; Liu et al. publish low/mid/high sensing layers but not their
+  # physical metre values. The 100 m midpoint and mapping are project design.
+  altitude_min_m: 50.0
+  altitude_max_m: 150.0
+  altitude_bounds_provenance: "LITERATURE_BACKED_BASELINE:MRMG_2026"
+  altitude_levels_m: [50.0, 100.0, 150.0]
+  altitude_levels_provenance: RESEARCH_ADAPTATION
   # Hybrid option C: mission/mobility stay in PaperUAVEnv; UavNetSim owns peer MAC/PHY.
   network_backend: uavnetsim
   network_backend_provenance: RESEARCH_DESIGN
