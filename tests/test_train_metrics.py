@@ -16,7 +16,10 @@ def test_sensing_metrics_from_info_keeps_episode_level_altitude_and_belief_field
 
     metrics = _sensing_metrics_from_info(info)
 
-    assert metrics == info
+    for key, value in info.items():
+        assert metrics[key] == value
+    assert metrics["false_confirmations_total"] == 0
+    assert metrics["confirmed_cells_total"] == 0
 
 
 def test_sensing_metrics_from_info_has_zero_defaults_for_legacy_scenarios():
@@ -25,3 +28,17 @@ def test_sensing_metrics_from_info_has_zero_defaults_for_legacy_scenarios():
     assert metrics["scanned_cells_total"] == 0
     assert metrics["information_gain_total"] == 0.0
     assert metrics["targets_confirmed_total"] == 0
+    assert metrics["false_confirmations_total"] == 0
+    assert metrics["confirmed_cells_total"] == 0
+
+
+def test_sensing_metrics_from_info_propagates_cell_confirmation_diagnostics():
+    info = {
+        "false_confirmations_total": 4,
+        "confirmed_cells_total": 9,
+    }
+
+    metrics = _sensing_metrics_from_info(info)
+
+    assert metrics["false_confirmations_total"] == 4
+    assert metrics["confirmed_cells_total"] == 9

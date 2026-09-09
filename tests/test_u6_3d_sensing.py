@@ -147,3 +147,49 @@ def test_u6_info_exposes_scalar_altitude_and_belief_sensing_diagnostics():
     assert info1["scanned_cells_step"] > 0
     assert info1["scanned_cells_total"] >= info1["scanned_cells_step"]
     assert info1["information_gain_total"] >= info1["information_gain_step"] >= 0.0
+
+
+def test_minimum_uncertainty_fusion_shares_most_certain_cell_posterior():
+    env = make_env(seed=90)
+    env.reset(seed=90)
+    y, x = 10, 10
+    env.belief_maps[:, y, x] = [0.60, 0.90, 0.70, 0.55, 0.65, 0.80]
+
+    env._fuse_peer_beliefs()
+
+    np.testing.assert_allclose(env.belief_maps[:, y, x], 0.90)
+    assert env.belief_source_map[y, x] == 1
+
+
+def test_empty_high_posterior_cell_is_recorded_as_false_confirmation():
+    env = make_env(seed=91)
+    env.reset(seed=91)
+    target_cells = {env._target_grid_cell(k) for k in range(env.n_targets)}
+    empty_cell = next((y, x) for y in range(env.peer_sensing_grid_n) for x in range(env.peer_sensing_grid_n)
+                      if (y, x) not in target_cells)
+    y, x = empty_cell
+    env.belief_maps[:, y, x] = 0.5
+    env.belief_maps[2, y, x] = env.peer_target_confirmation_threshold + 1e-4
+
+    env._confirm_peer_targets()
+
+    assert env.confirmed_cells[y, x]
+    assert env.false_confirmed_cells[y, x]
+    assert env.total_false_confirmations == 1
+    assert not env.target_found.any()
+
+
+def test_true_target_confirmation_is_driven_by_confirmed_cell_and_tracks_source():
+    env = make_env(seed=92)
+    env.reset(seed=92)
+    y, x = put_target_in_uav_cell(env, agent_idx=0, target_idx=0)
+    env.belief_maps[:, y, x] = 0.5
+    env.belief_maps[3, y, x] = env.peer_target_confirmation_threshold + 1e-4
+
+    env._confirm_peer_targets()
+
+    assert env.confirmed_cells[y, x]
+    assert not env.false_confirmed_cells[y, x]
+    assert env.target_found[0]
+    assert env.pending_report_source[0] == 3
+    assert env.target_known_by_agent[3, 0]

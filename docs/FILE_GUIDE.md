@@ -29,11 +29,11 @@ uav_search/
 
 **`models.py`** — pure physical/model functions: A2A communication rate, multi-rotor power, circle collision. Kept separate so radio/energy models can later be replaced independently.
 
-**`paper_env.py`** — stateful root-paper mission simulator. Paper-reproduction scenarios retain their existing planar control contract. In `u6` mode it switches to six identical peers, full 3D velocity/altitude motion, common-base launch pads, local/stale Dec-POMDP peer observations, Bayesian target belief maps, finite report buffers/TTL, one-hop-per-step forwarding, battery depletion, and direct/multi-hop/disconnected GCS diagnostics while delegating transport outcomes to `network_backends.py`.
+**`paper_env.py`** — stateful root-paper mission simulator. Paper-reproduction scenarios retain their existing planar control contract. In `u6` mode it switches to six identical peers, full 3D velocity/altitude motion, common-base launch pads, rejection-sampled valid obstacles, local/stale Dec-POMDP peer observations, Bayesian local sensing followed by minimum-entropy peer belief fusion and cell-first true/false confirmation, hard inter-UAV safety filtering, finite report buffers/TTL, one-hop-per-step forwarding, battery depletion, and direct/multi-hop/disconnected GCS diagnostics while delegating transport outcomes to `network_backends.py`.
 
 **`sensing.py`** — pure altitude-aware sensing primitives: low/mid/high profile selection, fixed 1/5/9-cell FOV footprints, Bayesian occupancy update and binary entropy. Keeping these functions pure makes sensing tests deterministic and separates paper-derived sensor parameters from environment control logic.
 
-**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the paper-equation peer channel for regression/ablation while honoring the fixed `u6` candidate radius. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and keeps one SimPy/channel/node set alive per episode. MARL owns transmit gating, transmit power and immediate next-hop selection; UavNetSim supplies CSMA/CA, PHY/channel delivery, native ACK/ARQ retries, delay/PDR/throughput and per-UAV radio TX energy. RF power affects PHY inside the fixed candidate radius but does not expand that radius.
+**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the paper-equation peer channel for regression/ablation while honoring the fixed `u6` candidate radius. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and keeps one SimPy/channel/node set alive per episode. UAV-to-UAV links retain native UavNetSim A2A propagation; any data/ACK pair involving the synthetic GCS uses the configured Al-Hourani-style urban A2G gain. MARL owns transmit gating, transmit power and immediate next-hop selection; UavNetSim supplies CSMA/CA, PHY/channel delivery, native ACK/ARQ retries, delay/PDR/throughput and per-UAV radio TX energy. RF power affects PHY inside the fixed candidate radius but does not expand that radius, while the actor topology snapshot is evaluated at the maximum controllable RF power so feasible high-power links are not hidden.
 
 ## `src/uav_search/algorithms/`
 
@@ -88,10 +88,10 @@ uav_search/
 - `test_homogeneous_paper_env.py` — homogeneous `u6` topology/action/report-routing behavior and seed determinism.
 - `test_homogeneous_algorithms.py` — verifies MASAC/MATD3/MADDPG accept the `u6` six-dimensional action and MATD3 smooths only continuous coordinates.
 - `test_u6_3d_motion.py` — full-3D action, altitude initialization/bounds and legacy 2-D compatibility.
-- `test_u6_3d_sensing.py` — altitude profiles, local belief sensing, no hidden-target leakage and sensing diagnostics.
+- `test_u6_3d_sensing.py` — altitude profiles, Bayesian local sensing, minimum-entropy peer fusion, cell-first true/false confirmation, no hidden-target leakage and sensing diagnostics.
 - `test_sensing.py` — pure FOV/Bayes/entropy primitives.
 - `test_train_metrics.py` — runner extraction of altitude/belief/sensing episode metrics.
-- `test_network_backends.py` — analytical-regression tests plus optional real-UavNetSim A2A/CSMA transport tests.
+- `test_network_backends.py` — analytical-regression tests plus real-UavNetSim A2A peer, A2G GCS, power-aware topology and CSMA/ACK transport tests.
 - `test_common.py` — replay/network/soft target update.
 - `test_algorithms.py` — all three action/update/checkpoint flows.
 - `test_logging.py` — diagnostics/error logs and plots.

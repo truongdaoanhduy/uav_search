@@ -96,7 +96,12 @@ class AnalyticalNetworkBackend:
         del tx_power_w
         return self._contact_range_m(gcs=gcs)
 
-    def _received_power_w(self, receiver_pos: np.ndarray, transmitter_pos: np.ndarray) -> float:
+    def _received_power_w(
+        self,
+        receiver_pos: np.ndarray,
+        transmitter_pos: np.ndarray,
+        tx_power_w: float | None = None,
+    ) -> float:
         delta = transmitter_pos - receiver_pos
         gain = path_gain_linear(
             float(np.linalg.norm(delta[:2])),
@@ -104,13 +109,16 @@ class AnalyticalNetworkBackend:
             self.cfg,
             force_los=False,
         )
-        return float(self._tx_power_w() * gain)
+        power_w = self._tx_power_w() if tx_power_w is None else max(float(tx_power_w), 0.0)
+        return float(power_w * gain)
 
     def link_snapshot(
         self,
         positions: np.ndarray,
         gcs_position: np.ndarray,
         obstacles: np.ndarray | None = None,
+        *,
+        tx_power_w: float | None = None,
     ) -> NetworkLinkSnapshot:
         del obstacles  # The retained analytical paper channel did not use building geometry.
         positions = np.asarray(positions, dtype=np.float64)
@@ -120,6 +128,7 @@ class AnalyticalNetworkBackend:
         adjacency = np.zeros((n_agents, n_agents), dtype=np.int8)
         gcs_rates = np.zeros(n_agents, dtype=np.float64)
         rmin = float(self.paper["min_comm_rate_bps"])
+        snapshot_power_w = self._tx_power_w() if tx_power_w is None else max(float(tx_power_w), 0.0)
 
         for receiver in range(n_agents):
             for transmitter in range(n_agents):
@@ -132,7 +141,9 @@ class AnalyticalNetworkBackend:
                 for interferer in range(n_agents):
                     if interferer in (receiver, transmitter):
                         continue
-                    interference += self._received_power_w(positions[receiver], positions[interferer])
+                    interference += self._received_power_w(
+                        positions[receiver], positions[interferer], snapshot_power_w
+                    )
                 delta = positions[transmitter] - positions[receiver]
                 rate = communication_rate_bps(
                     float(np.linalg.norm(delta[:2])),
@@ -140,6 +151,7 @@ class AnalyticalNetworkBackend:
                     self.cfg,
                     interference_power_w=float(interference),
                     force_los=False,
+                    tx_power_w=snapshot_power_w,
                 )
                 pair_rates[receiver, transmitter] = rate
                 if rate > rmin:
@@ -150,7 +162,7 @@ class AnalyticalNetworkBackend:
                 gcs_rates[transmitter] = 0.0
                 continue
             interference = sum(
-                self._received_power_w(gcs_position, positions[j])
+                self._received_power_w(gcs_position, positions[j], snapshot_power_w)
                 for j in range(n_agents)
                 if j != transmitter
             )
@@ -161,6 +173,7 @@ class AnalyticalNetworkBackend:
                 self.cfg,
                 interference_power_w=float(interference),
                 force_los=False,
+                tx_power_w=snapshot_power_w,
             )
 
         return NetworkLinkSnapshot(
@@ -460,6 +473,7 @@ class UavNetSimBackend:
                 "csma": importlib.import_module("mac.csma_ca"),
                 "packet": importlib.import_module("entities.packet"),
                 "a2a": importlib.import_module("phy.a2a"),
+                "sionna_rt": importlib.import_module("phy.sionna_rt"),
             }
         except (ModuleNotFoundError, ImportError) as exc:
             raise RuntimeError(
@@ -493,7 +507,7 @@ class UavNetSimBackend:
         ref = self.cfg.get("reference_backed", {})
         ucfg = self._modules["config"]
         return {
-            "CHANNEL_MODE": "a2a",
+            "CHANNEL_MODE": str(self._setting("uavnetsim_channel_mode", "a2a")),
             "LOS_A2A_MODEL": str(self._setting("uavnetsim_los_model", "free_space")),
             "NLOS_A2A_MODEL": str(self._setting("uavnetsim_nlos_model", "urban")),
             "CARRIER_FREQUENCY": float(self._setting("uavnetsim_carrier_hz", ref.get("carrier_hz", ucfg.CARRIER_FREQUENCY))),
@@ -571,6 +585,8 @@ class UavNetSimBackend:
         gcs_position = np.asarray(gcs_position, dtype=np.float64)
         all_positions = np.vstack([positions, gcs_position])
         n_agents = int(len(positions))
+        gcs_id = n_agents
+        GainEstimate = self._modules["sionna_rt"].GainEstimate
 
         env = simpy.Environment()
         event_bus = _CaptureEventBus()
@@ -585,8 +601,36 @@ class UavNetSimBackend:
         simulator.channel_states = {i: simpy.Resource(env, capacity=1) for i in range(n_agents + 1)}
         simulator.drones = [_RadioNode(simulator, i, all_positions[i]) for i in range(n_agents + 1)]
         simulator.ack_sequence = int((self._episode_counter + 1) * 1_000_000_000)
+        backend = self
 
         class PowerAwareChannel(BaseChannel):
+            def _estimates(channel_self, transmitter_ids, receiver_id):
+                transmitter_ids = list(dict.fromkeys(int(v) for v in transmitter_ids))
+                result: dict[tuple[int, int], Any] = {}
+                native_ids = [
+                    transmitter_id for transmitter_id in transmitter_ids
+                    if transmitter_id != receiver_id
+                    and transmitter_id != gcs_id
+                    and receiver_id != gcs_id
+                ]
+                if native_ids:
+                    result.update(super(PowerAwareChannel, channel_self)._estimates(native_ids, receiver_id))
+                for transmitter_id in transmitter_ids:
+                    if transmitter_id == receiver_id:
+                        continue
+                    if transmitter_id != gcs_id and receiver_id != gcs_id:
+                        continue
+                    start = np.asarray(channel_self.simulator.drones[transmitter_id].coords, dtype=np.float64)
+                    end = np.asarray(channel_self.simulator.drones[receiver_id].coords, dtype=np.float64)
+                    gain, p_los = backend._a2g_gain_with_probability(start, end)
+                    result[(transmitter_id, receiver_id)] = GainEstimate(
+                        nominal=float(gain),
+                        lower=float(gain),
+                        upper=float(gain),
+                        line_of_sight=bool(p_los >= 0.5),
+                    )
+                return result
+
             def transmit(channel_self, packet, transmitter_id, receiver_ids):
                 previous = float(ucfg.TRANSMITTING_POWER)
                 try:
@@ -648,17 +692,60 @@ class UavNetSimBackend:
         simulator.airspace.obstacles = raw.reshape((-1, 3)) if raw.size else np.empty((0, 3), dtype=np.float64)
         return simulator
 
-    def _gain(self, start: np.ndarray, end: np.ndarray, airspace: _PaperAirspace) -> float:
+    def _a2g_gain_with_probability(self, start: np.ndarray, end: np.ndarray) -> tuple[float, float]:
+        """Al-Hourani-style urban A2G average gain and LoS probability."""
+        start = np.asarray(start, dtype=np.float64)
+        end = np.asarray(end, dtype=np.float64)
+        delta = end - start
+        distance_m = max(float(np.linalg.norm(delta)), 1e-9)
+        horizontal_m = float(np.linalg.norm(delta[:2]))
+        elevation_deg = float(np.degrees(np.arctan2(abs(float(delta[2])), max(horizontal_m, 1e-12))))
+        a = float(self._setting("a2g_environment_a", 9.61))
+        b = float(self._setting("a2g_environment_b", 0.16))
+        eta_los_db = float(self._setting("a2g_eta_los_db", 1.0))
+        eta_nlos_db = float(self._setting("a2g_eta_nlos_db", 20.0))
+        if a <= 0.0 or b <= 0.0:
+            raise ValueError("A2G environment parameters a and b must be positive")
+        p_los = 1.0 / (1.0 + a * np.exp(-b * (elevation_deg - a)))
+        frequency_hz = float(self._radio_parameters()["CARRIER_FREQUENCY"])
+        c_mps = 299_792_458.0
+        free_space_db = 20.0 * np.log10(4.0 * np.pi * frequency_hz * distance_m / c_mps)
+        average_path_loss_db = free_space_db + p_los * eta_los_db + (1.0 - p_los) * eta_nlos_db
+        gain = 10.0 ** (-average_path_loss_db / 10.0)
+        return float(gain), float(p_los)
+
+    def _a2g_gain(self, start: np.ndarray, end: np.ndarray) -> float:
+        return self._a2g_gain_with_probability(start, end)[0]
+
+    def _gain(
+        self,
+        start: np.ndarray,
+        end: np.ndarray,
+        airspace: _PaperAirspace,
+        *,
+        gcs: bool = False,
+    ) -> float:
+        if gcs:
+            return self._a2g_gain(start, end)
         a2a = self._modules["a2a"]
         params = self._radio_parameters()
         los = airspace.has_line_of_sight(start, end)
         model = str(params["LOS_A2A_MODEL"] if los else params["NLOS_A2A_MODEL"])
         return float(a2a.path_gain(float(np.linalg.norm(end - start)), float(params["CARRIER_FREQUENCY"]), model, los))
 
-    def _rate(self, start: np.ndarray, end: np.ndarray, airspace: _PaperAirspace) -> float:
+    def _rate(
+        self,
+        start: np.ndarray,
+        end: np.ndarray,
+        airspace: _PaperAirspace,
+        *,
+        gcs: bool = False,
+        tx_power_w: float | None = None,
+    ) -> float:
         params = self._radio_parameters()
-        gain = self._gain(start, end, airspace)
-        signal = float(params["TRANSMITTING_POWER"]) * gain
+        gain = self._gain(start, end, airspace, gcs=gcs)
+        power_w = float(params["TRANSMITTING_POWER"]) if tx_power_w is None else max(float(tx_power_w), 0.0)
+        signal = power_w * gain
         bandwidth = max(float(params["BANDWIDTH"]), 1.0)
         thermal_noise_density_dbm_hz = -174.0
         receiver_noise_figure_db = 7.0
@@ -672,6 +759,8 @@ class UavNetSimBackend:
         positions: np.ndarray,
         gcs_position: np.ndarray,
         obstacles: np.ndarray | None = None,
+        *,
+        tx_power_w: float | None = None,
     ) -> NetworkLinkSnapshot:
         positions = np.asarray(positions, dtype=np.float64)
         gcs_position = np.asarray(gcs_position, dtype=np.float64)
@@ -687,13 +776,17 @@ class UavNetSimBackend:
                     continue
                 if float(np.linalg.norm(positions[transmitter] - positions[receiver])) > self._contact_range_m(gcs=False):
                     continue
-                rate = self._rate(positions[transmitter], positions[receiver], airspace)
+                rate = self._rate(
+                    positions[transmitter], positions[receiver], airspace, tx_power_w=tx_power_w
+                )
                 pair_rates[receiver, transmitter] = rate
                 if rate > rmin:
                     adjacency[receiver, transmitter] = 1
         for transmitter in range(n_agents):
             if float(np.linalg.norm(positions[transmitter] - gcs_position)) <= self._contact_range_m(gcs=True):
-                gcs_rates[transmitter] = self._rate(positions[transmitter], gcs_position, airspace)
+                gcs_rates[transmitter] = self._rate(
+                    positions[transmitter], gcs_position, airspace, gcs=True, tx_power_w=tx_power_w
+                )
         return NetworkLinkSnapshot(pair_rates, gcs_rates, adjacency)
 
     def transmit(
@@ -755,7 +848,9 @@ class UavNetSimBackend:
                     sender, recipient, int(intent.requested_bytes), 0, 0.0, distance
                 ))
                 continue
-            gain = self._gain(positions[sender], endpoint, airspace)
+            gain = self._gain(
+                positions[sender], endpoint, airspace, gcs=(recipient == GCS_NODE)
+            )
             sinr_db = 10.0 * np.log10(tx_power * gain / noise_w) if tx_power > 0.0 else -200.0
             rate = float(params["BIT_RATE"]) if sinr_db >= float(params["SINR_THRESHOLD_DB"]) else 0.0
             # Inside the configured operational envelope, let UavNetSim see even
@@ -803,7 +898,9 @@ class UavNetSimBackend:
                 tx_power_w = max(0.0, float(ucfg.TRANSMITTING_POWER if intent.tx_power_w is None else intent.tx_power_w))
                 endpoint = gcs_position if recipient_raw == GCS_NODE else positions[recipient_raw]
                 distance = float(np.linalg.norm(positions[sender] - endpoint))
-                gain = self._gain(positions[sender], endpoint, simulator.airspace)
+                gain = self._gain(
+                    positions[sender], endpoint, simulator.airspace, gcs=(recipient_raw == GCS_NODE)
+                )
                 sinr_db = 10.0 * np.log10(tx_power_w * gain / noise_w) if tx_power_w > 0.0 else -200.0
                 nominal_rate = float(ucfg.BIT_RATE) if sinr_db >= float(ucfg.SINR_THRESHOLD_DB) else 0.0
                 key_meta = (sender, recipient_raw)

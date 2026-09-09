@@ -32,7 +32,12 @@ def test_analytical_link_snapshot_matches_existing_peer_channel_model():
     env.reset(seed=11)
     backend = create_network_backend("analytical", cfg, seed=11)
 
-    snapshot = backend.link_snapshot(env.positions, env.gcs_position, env.obstacles)
+    snapshot = backend.link_snapshot(
+        env.positions,
+        env.gcs_position,
+        env.obstacles,
+        tx_power_w=env.peer_tx_power_max_w,
+    )
 
     np.testing.assert_allclose(snapshot.pair_rates_bps, env.last_pair_rates_bps)
     np.testing.assert_allclose(snapshot.gcs_rates_bps, env.last_gcs_rates_bps)
@@ -303,5 +308,111 @@ def test_uavnetsim_inactive_receiver_cannot_ack_or_complete_hop():
     assert 1 not in result.node_tx_energy_j
     assert not any(
         event_type == "packet_ack_received" and int(data.get("ack_from", -1)) == 1
+        for event_type, _time_us, data in backend._episode.event_bus.events
+    )
+
+
+def test_uavnetsim_a2g_gain_improves_with_elevation_at_equal_3d_distance():
+    cfg = load_config("masac", "u6")
+    backend = UavNetSimBackend(cfg, seed=81)
+    gcs = np.array([0.0, 0.0, 0.0], dtype=float)
+    distance = 1000.0
+    low_z, high_z = 50.0, 150.0
+    low = np.array([np.sqrt(distance**2 - low_z**2), 0.0, low_z], dtype=float)
+    high = np.array([np.sqrt(distance**2 - high_z**2), 0.0, high_z], dtype=float)
+
+    assert np.linalg.norm(low - gcs) == pytest.approx(distance)
+    assert np.linalg.norm(high - gcs) == pytest.approx(distance)
+    assert backend._a2g_gain(high, gcs) > backend._a2g_gain(low, gcs)
+
+
+def test_uavnetsim_a2a_gain_still_delegates_to_native_model(monkeypatch):
+    from uav_search.envs.network_backends import _PaperAirspace
+
+    cfg = load_config("masac", "u6")
+    backend = UavNetSimBackend(cfg, seed=82)
+    sentinel = 0.123456
+    monkeypatch.setattr(backend._modules["a2a"], "path_gain", lambda *args, **kwargs: sentinel)
+    airspace = _PaperAirspace(np.empty((0, 3), dtype=float))
+
+    gain = backend._gain(
+        np.array([0.0, 0.0, 100.0]),
+        np.array([100.0, 0.0, 100.0]),
+        airspace,
+        gcs=False,
+    )
+    assert gain == pytest.approx(sentinel)
+
+
+def test_persistent_uavnetsim_channel_uses_a2g_estimate_for_gcs_pairs():
+    cfg = load_config("masac", "u6")
+    backend = UavNetSimBackend(cfg, seed=83)
+    positions = np.array(
+        [[100.0, 100.0, 60.0], [150.0, 100.0, 60.0], [4500.0, 4500.0, 60.0],
+         [4600.0, 4500.0, 60.0], [4500.0, 4600.0, 60.0], [4600.0, 4600.0, 60.0]],
+        dtype=float,
+    )
+    gcs = np.array([200.0, 100.0, 0.0], dtype=float)
+    obstacles = np.empty((0, 3), dtype=float)
+    backend.reset_episode(positions, gcs, obstacles)
+    gcs_id = len(positions)
+
+    with backend._with_radio_parameters():
+        gcs_estimate = backend._episode.channel._estimates([0], gcs_id)[(0, gcs_id)]
+        peer_estimate = backend._episode.channel._estimates([0], 1)[(0, 1)]
+
+        assert gcs_estimate.nominal == pytest.approx(backend._a2g_gain(positions[0], gcs))
+        assert peer_estimate.nominal == pytest.approx(
+            backend._gain(positions[0], positions[1], backend._episode.airspace, gcs=False)
+        )
+
+
+def test_uavnetsim_snapshot_power_exposes_link_feasible_only_at_high_power():
+    cfg = load_config("masac", "u6")
+    backend = UavNetSimBackend(cfg, seed=84)
+    positions = np.array(
+        [[100.0, 100.0, 60.0], [700.0, 100.0, 60.0], [4500.0, 4500.0, 60.0],
+         [4600.0, 4500.0, 60.0], [4500.0, 4600.0, 60.0], [4600.0, 4600.0, 60.0]],
+        dtype=float,
+    )
+    gcs = np.array([0.0, 2500.0, 0.0], dtype=float)
+    obstacles = np.array([[400.0, 100.0, 50.0]], dtype=float)
+
+    low = backend.link_snapshot(positions, gcs, obstacles, tx_power_w=0.1)
+    high = backend.link_snapshot(positions, gcs, obstacles, tx_power_w=0.4)
+
+    assert low.pair_rates_bps[1, 0] == 0.0
+    assert low.adjacency[1, 0] == 0
+    assert high.pair_rates_bps[1, 0] > 0.0
+    assert high.adjacency[1, 0] == 1
+
+
+def test_uavnetsim_a2g_data_and_ack_complete_gcs_hop():
+    from uav_search.envs.network_backends import GCS_NODE
+
+    cfg = load_config("masac", "u6")
+    backend = UavNetSimBackend(cfg, seed=85)
+    positions = np.array(
+        [[100.0, 100.0, 100.0], [4500.0, 4500.0, 100.0], [4600.0, 4500.0, 100.0],
+         [4500.0, 4600.0, 100.0], [4600.0, 4600.0, 100.0], [4400.0, 4600.0, 100.0]],
+        dtype=float,
+    )
+    gcs = np.array([0.0, 100.0, 0.0], dtype=float)
+    obstacles = np.empty((0, 3), dtype=float)
+
+    result = backend.transmit(
+        [TransmissionIntent(sender=0, recipient=GCS_NODE, requested_bytes=1000, tx_power_w=0.1)],
+        positions,
+        gcs,
+        obstacles,
+        dt_s=1.0,
+        step_index=0,
+    )
+
+    assert result.delivered_bytes == 1000
+    assert result.outcomes[0].recipient == GCS_NODE
+    assert result.node_tx_energy_j[0] > 0.0
+    assert any(
+        event_type == "packet_ack_received" and int(data.get("sender", -1)) == 0
         for event_type, _time_us, data in backend._episode.event_bus.events
     )

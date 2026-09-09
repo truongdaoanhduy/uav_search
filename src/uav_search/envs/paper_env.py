@@ -198,6 +198,48 @@ class PaperUAVEnv:
             "increase launch_radius_m or reduce initial_min_separation_m"
         )
 
+    def _sample_peer_obstacles(self) -> np.ndarray:
+        """Sample valid peer-scenario obstacle circles with deterministic rejection sampling."""
+        if self.n_obstacles <= 0:
+            return np.empty((0, 3), dtype=np.float64)
+
+        radius_min = float(self.assumed["obstacle_radius_min_m"])
+        radius_max = float(self.assumed["obstacle_radius_max_m"])
+        clearance = max(0.0, float(self.scenario.get("obstacle_clearance_m", 0.0)))
+        max_attempts = int(self.scenario.get("obstacle_sampling_max_attempts", 100_000))
+        if radius_min <= 0.0 or radius_max < radius_min:
+            raise ValueError("invalid obstacle radius bounds")
+        if max_attempts <= 0:
+            raise ValueError("obstacle_sampling_max_attempts must be positive")
+
+        protected = np.vstack([
+            self.positions[:, :2],
+            self.gcs_position[:2].reshape(1, 2),
+            self.targets,
+        ])
+        circles: list[np.ndarray] = []
+        for _ in range(max_attempts):
+            radius = float(self.rng.uniform(radius_min, radius_max))
+            margin = radius + clearance
+            if 2.0 * margin > self.area_size_m:
+                raise ValueError("obstacle radius/clearance cannot fit inside the map")
+            center = self.rng.uniform(margin, self.area_size_m - margin, size=2)
+            if protected.size and np.any(np.linalg.norm(protected - center, axis=1) < margin):
+                continue
+            if any(
+                float(np.linalg.norm(circle[:2] - center)) < float(circle[2] + radius + clearance)
+                for circle in circles
+            ):
+                continue
+            circles.append(np.array([center[0], center[1], radius], dtype=np.float64))
+            if len(circles) == self.n_obstacles:
+                return np.stack(circles, axis=0)
+
+        raise RuntimeError(
+            "Unable to place all peer-scenario obstacles without overlaps; "
+            "reduce obstacle density/radii or clearance"
+        )
+
     def reset(self, seed: int | None = None):
         if seed is not None:
             self._seed = int(seed)
@@ -230,11 +272,14 @@ class PaperUAVEnv:
         self.uav_active = np.ones(self.n_agents, dtype=bool)
         self.targets = self.rng.uniform(0.0, self.area_size_m, size=(self.n_targets, 2)).astype(np.float64)
         self.target_found = np.zeros(self.n_targets, dtype=bool)
-        radii = self.rng.uniform(
-            self.assumed["obstacle_radius_min_m"], self.assumed["obstacle_radius_max_m"], size=self.n_obstacles
-        )
-        centers = self.rng.uniform(0.0, self.area_size_m, size=(self.n_obstacles, 2))
-        self.obstacles = np.column_stack([centers, radii]).astype(np.float64)
+        if self.peer_mode:
+            self.obstacles = self._sample_peer_obstacles()
+        else:
+            radii = self.rng.uniform(
+                self.assumed["obstacle_radius_min_m"], self.assumed["obstacle_radius_max_m"], size=self.n_obstacles
+            )
+            centers = self.rng.uniform(0.0, self.area_size_m, size=(self.n_obstacles, 2))
+            self.obstacles = np.column_stack([centers, radii]).astype(np.float64)
         self.step_count = 0
         self.cumulative_broken_time = np.zeros(self.n_rotor, dtype=np.float64)
         self.last_rates_bps = np.zeros(self.n_rotor, dtype=np.float64)
@@ -269,6 +314,15 @@ class PaperUAVEnv:
                 self.peer_belief_prior,
                 dtype=np.float64,
             )
+            self.belief_source_map = np.full(
+                (self.peer_sensing_grid_n, self.peer_sensing_grid_n), -1, dtype=np.int64
+            )
+            self.confirmed_cells = np.zeros(
+                (self.peer_sensing_grid_n, self.peer_sensing_grid_n), dtype=bool
+            )
+            self.false_confirmed_cells = np.zeros_like(self.confirmed_cells)
+            self.last_false_confirmations = 0
+            self.total_false_confirmations = 0
             self.last_sensor_positive = np.zeros((self.n_agents, self.n_targets), dtype=bool)
             self.last_information_gain_by_agent = np.zeros(self.n_agents, dtype=np.float64)
             self.last_scanned_cells_by_agent = np.zeros(self.n_agents, dtype=np.int64)
@@ -394,7 +448,10 @@ class PaperUAVEnv:
             if callable(set_active) and hasattr(self, "uav_active"):
                 set_active(self.uav_active)
             snapshot = self.network_backend.link_snapshot(
-                self.positions, self.gcs_position, getattr(self, "obstacles", None)
+                self.positions,
+                self.gcs_position,
+                getattr(self, "obstacles", None),
+                tx_power_w=self.peer_tx_power_max_w,
             )
             self.last_pair_rates_bps[:] = snapshot.pair_rates_bps
             self.last_gcs_rates_bps[:] = snapshot.gcs_rates_bps
@@ -562,31 +619,60 @@ class PaperUAVEnv:
                     patch.append(0.0)
         return patch
 
-    def _confirm_peer_targets(self) -> None:
+    def _fuse_peer_beliefs(self) -> None:
+        """Share the lowest-uncertainty posterior for every grid cell across the swarm."""
         if not self.peer_mode:
             return
+        beliefs = np.clip(self.belief_maps, 0.0, 1.0)
+        entropy = np.zeros_like(beliefs, dtype=np.float64)
+        interior = (beliefs > 0.0) & (beliefs < 1.0)
+        p = beliefs[interior]
+        entropy[interior] = -(p * np.log2(p) + (1.0 - p) * np.log2(1.0 - p))
+        source = np.argmin(entropy, axis=0).astype(np.int64)
+        fused = np.take_along_axis(beliefs, source[None, :, :], axis=0)[0]
+        self.belief_source_map[...] = source
+        self.belief_maps[...] = fused[None, :, :]
+
+    def _confirm_peer_targets(self) -> None:
+        """Confirm threshold-crossing cells first, then evaluate them against target truth."""
+        if not self.peer_mode:
+            return
+        self.last_false_confirmations = 0
+        self._fuse_peer_beliefs()
         threshold = self.peer_target_confirmation_threshold
+        fused = self.belief_maps[0]
+        candidate_cells = np.argwhere((fused >= threshold) & ~self.confirmed_cells)
+        targets_by_cell: dict[tuple[int, int], list[int]] = {}
         for target_idx in range(self.n_targets):
-            if self.target_found[target_idx]:
-                continue
-            y, x = self._target_grid_cell(target_idx)
-            candidates: list[tuple[float, float, int]] = []
-            for agent_idx in range(self.n_agents):
-                if not self.uav_active[agent_idx]:
+            targets_by_cell.setdefault(self._target_grid_cell(target_idx), []).append(target_idx)
+
+        for y_raw, x_raw in candidate_cells:
+            y, x = int(y_raw), int(x_raw)
+            self.confirmed_cells[y, x] = True
+            detector = int(self.belief_source_map[y, x])
+            if detector < 0 or detector >= self.n_agents or not self.uav_active[detector]:
+                active = np.flatnonzero(self.uav_active)
+                if active.size == 0:
                     continue
-                posterior = float(self.belief_maps[agent_idx, y, x])
-                if posterior < threshold:
-                    continue
-                horizontal_distance = float(np.linalg.norm(self.targets[target_idx] - self.positions[agent_idx, :2]))
-                candidates.append((-posterior, horizontal_distance, agent_idx))
-            if not candidates:
+                cell_xy = np.array(
+                    [(x + 0.5) * self.peer_sensing_grid_cell_m, (y + 0.5) * self.peer_sensing_grid_cell_m],
+                    dtype=np.float64,
+                )
+                distances = np.linalg.norm(self.positions[active, :2] - cell_xy, axis=1)
+                detector = int(active[int(np.argmin(distances))])
+
+            true_targets = [idx for idx in targets_by_cell.get((y, x), []) if not self.target_found[idx]]
+            if not true_targets:
+                self.false_confirmed_cells[y, x] = True
+                self.last_false_confirmations += 1
+                self.total_false_confirmations += 1
                 continue
-            _, _, detector = min(candidates)
-            detector = int(detector)
-            self.target_found[target_idx] = True
-            self.target_known_by_agent[detector, target_idx] = True
-            self.pending_report_source[target_idx] = detector
-            self.last_new_targets_by_agent[detector] += 1
+
+            for target_idx in true_targets:
+                self.target_found[target_idx] = True
+                self.target_known_by_agent[detector, target_idx] = True
+                self.pending_report_source[target_idx] = detector
+                self.last_new_targets_by_agent[detector] += 1
 
     def _observations(self) -> dict[str, np.ndarray]:
         """Build type-specific observations from paper Eqs. (17)-(20).
@@ -1066,6 +1152,38 @@ class PaperUAVEnv:
                     self.positions[i, :2] = previous_xy[i]
                 if i in self.multirotor_indices:
                     self.velocities[i] = 0.0
+
+        if self.peer_mode:
+            # Liu-style safety is a hard feasibility constraint rather than only a
+            # reward penalty. Project the joint candidate state back toward the
+            # previous safe state until rollbacks cannot create a new pairwise
+            # violation. If an externally injected state is already unsafe, motion
+            # that increases separation remains allowed so agents can escape it.
+            for _ in range(max(1, self.n_agents)):
+                rejected: set[int] = set()
+                for i in range(self.n_agents):
+                    if not self.uav_active[i]:
+                        continue
+                    for j in range(i + 1, self.n_agents):
+                        if not self.uav_active[j]:
+                            continue
+                        previous_distance = float(np.linalg.norm(previous_positions[i] - previous_positions[j]))
+                        candidate_distance = float(np.linalg.norm(self.positions[i] - self.positions[j]))
+                        if candidate_distance > self.safety_distance_m:
+                            continue
+                        became_unsafe = previous_distance > self.safety_distance_m
+                        failed_to_separate = candidate_distance <= previous_distance + 1e-9
+                        if not (became_unsafe or failed_to_separate):
+                            continue
+                        for idx in (i, j):
+                            if float(np.linalg.norm(self.positions[idx] - previous_positions[idx])) > 1e-9:
+                                rejected.add(idx)
+                if not rejected:
+                    break
+                rejected_idx = np.fromiter(sorted(rejected), dtype=np.int64)
+                self.positions[rejected_idx] = previous_positions[rejected_idx]
+                self.velocities[rejected_idx] = 0.0
+
         for i in range(self.n_agents):
             for j in range(i + 1, self.n_agents):
                 if np.linalg.norm(self.positions[i] - self.positions[j]) <= self.safety_distance_m:
@@ -1211,6 +1329,9 @@ class PaperUAVEnv:
                 "information_gain_total": float(self.total_information_gain),
                 "targets_confirmed_step": int(self.last_new_targets_by_agent.sum()),
                 "targets_confirmed_total": int(self.target_found.sum()),
+                "false_confirmations_step": int(self.last_false_confirmations),
+                "false_confirmations_total": int(self.total_false_confirmations),
+                "confirmed_cells_total": int(self.confirmed_cells.sum()),
             }
         else:
             sensing_diag = {
@@ -1227,6 +1348,9 @@ class PaperUAVEnv:
                 "information_gain_total": 0.0,
                 "targets_confirmed_step": 0,
                 "targets_confirmed_total": int(self.target_found.sum()),
+                "false_confirmations_step": 0,
+                "false_confirmations_total": 0,
+                "confirmed_cells_total": int(self.target_found.sum()),
             }
         return {
             "step": self.step_count,

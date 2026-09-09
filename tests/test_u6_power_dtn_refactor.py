@@ -295,3 +295,39 @@ def test_u6_can_use_scenario_specific_literature_backed_macro_step_without_chang
 
     legacy = PaperUAVEnv(load_config("masac", "f1_m5"), seed=61)
     assert legacy.dt == pytest.approx(float(legacy.assumed["dt_s"]))
+
+
+def test_u6_reset_never_places_obstacles_on_mission_entities_or_each_other():
+    env = analytical_u6(seed=0)
+    env.reset(seed=0)
+
+    for x, y, radius in env.obstacles:
+        center = np.array([x, y], dtype=np.float64)
+        assert x - radius >= 0.0
+        assert y - radius >= 0.0
+        assert x + radius <= env.area_size_m
+        assert y + radius <= env.area_size_m
+        assert np.linalg.norm(env.gcs_position[:2] - center) >= radius
+        assert np.all(np.linalg.norm(env.positions[:, :2] - center, axis=1) >= radius)
+        assert np.all(np.linalg.norm(env.targets - center, axis=1) >= radius)
+
+    for i in range(len(env.obstacles)):
+        for j in range(i + 1, len(env.obstacles)):
+            separation = np.linalg.norm(env.obstacles[i, :2] - env.obstacles[j, :2])
+            assert separation >= env.obstacles[i, 2] + env.obstacles[j, 2]
+
+
+def test_u6_refresh_links_observes_topology_at_max_controllable_power(monkeypatch):
+    env = analytical_u6(seed=62)
+    env.reset(seed=62)
+    original = env.network_backend.link_snapshot
+    seen = {"tx_power_w": None}
+
+    def spy(positions, gcs_position, obstacles=None, tx_power_w=None):
+        seen["tx_power_w"] = tx_power_w
+        return original(positions, gcs_position, obstacles)
+
+    monkeypatch.setattr(env.network_backend, "link_snapshot", spy)
+    env._refresh_links()
+
+    assert seen["tx_power_w"] == pytest.approx(env.peer_tx_power_max_w)

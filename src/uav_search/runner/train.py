@@ -60,6 +60,8 @@ def _sensing_metrics_from_info(info: dict[str, Any]) -> dict[str, float | int]:
         "positive_sensor_observations_total": int(info.get("positive_sensor_observations_total", 0)),
         "information_gain_total": float(info.get("information_gain_total", 0.0)),
         "targets_confirmed_total": int(info.get("targets_confirmed_total", 0)),
+        "false_confirmations_total": int(info.get("false_confirmations_total", 0)),
+        "confirmed_cells_total": int(info.get("confirmed_cells_total", 0)),
     }
 
 
@@ -391,6 +393,8 @@ def train_experiment(
                 "sensing/positive_observations_total": ep_metrics["positive_sensor_observations_total"],
                 "sensing/information_gain_total": ep_metrics["information_gain_total"],
                 "sensing/targets_confirmed_total": ep_metrics["targets_confirmed_total"],
+                "sensing/false_confirmations_total": ep_metrics["false_confirmations_total"],
+                "sensing/confirmed_cells_total": ep_metrics["confirmed_cells_total"],
                 "group/episode": episode,
                 "group/fixed_return_mean": ep_metrics["fixed_return_mean"],
                 "group/rotor_return_mean": ep_metrics["rotor_return_mean"],

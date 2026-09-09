@@ -50,13 +50,21 @@ scenario:
   uavnetsim_sinr_threshold_provenance: UAVNETSIM_NATIVE
   uavnetsim_los_model: free_space
   uavnetsim_nlos_model: urban
+  # Ground links are not A2A: use the Al-Hourani probabilistic urban A2G model.
+  # Urban parameters (a,b,eta_LoS,eta_NLoS) = (9.61,0.16,1 dB,20 dB).
+  a2g_model: al_hourani_urban
+  a2g_environment_a: 9.61
+  a2g_environment_b: 0.16
+  a2g_eta_los_db: 1.0
+  a2g_eta_nlos_db: 20.0
+  a2g_model_provenance: "LITERATURE_BACKED_BASELINE:AL_HOURANI_URBAN_A2G"
   # Fixed one-hop candidate radius. A 2026 heterogeneous maritime unmanned-system
   # study reports approximately 2 km WLAN range; UavNetSim still resolves PHY/MAC
   # success inside this geometric candidate radius. Cross-scenario calibration remains required.
   peer_contact_range_m: 2000.0
   gcs_contact_range_m: 2000.0
   contact_range_provenance: "LITERATURE_BACKED_BASELINE:ENERGY_INFORMATION_DECISION_2026_2KM_WLAN"
-  contact_range_calibration_status: "RESEARCH_DESIGN_CALIBRATED:50_SEEDS_X_600S_FULL_3D"
+  contact_range_calibration_status: "RECALIBRATION_REQUIRED:POST_A2G_POWER_AWARE_HARDENING"
   tx_power_min_w: 0.1
   tx_power_max_w: 0.4
   tx_power_reference_w: 0.1

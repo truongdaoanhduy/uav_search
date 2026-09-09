@@ -30,7 +30,7 @@
 | Ground station placement | edge of area | Literature-backed concept | Wheeb et al., Electronics 12 (2023) 1334 places the ground base station at the edge of a SAR search area and lets UAVs relay target reports toward it. The exact coordinate `[0,2500,0]` is adapted. |
 | Macro step | 1 s | Literature-backed baseline | Buffer-aided multi-UAV relay literature uses 1 s trajectory slots; `u6` makes this scenario-specific so root-paper scenarios are unchanged. |
 | Development horizon | 600 s = 600 x 1 s | Literature-backed baseline + calibration required | Wheeb et al. 2023 uses 600 s in a UAV SAR FANET study. Map/team differences mean sensitivity analysis is still required. |
-| Local candidate communication radius | 2 km | Literature-backed + scenario-calibrated baseline | *Energy–Information–Decision Coupling Optimization for Cooperative Operations of Heterogeneous Maritime Unmanned Systems*, Drones 10 (2026) 234 reports approximately 2 km WLAN radius. A 50-seed × 600 s full-3D `u6` sweep then retained 2 km because it produced a useful direct/multi-hop/disconnected mixture. |
+| Local candidate communication radius | 2 km | Literature-backed development baseline; post-hardening recalibration required | *Energy–Information–Decision Coupling Optimization for Cooperative Operations of Heterogeneous Maritime Unmanned Systems*, Drones 10 (2026) 234 reports approximately 2 km WLAN radius. The former 50-seed topology sweep predates the A2G/power-aware hardening and is retained below only as historical evidence, not current calibration. |
 | RF power range | 0.1--0.4 W | Literature-backed baseline | Cao et al., *Joint Trajectory and Communication Design for Buffer-Aided Multi-UAV Relaying Networks*, Applied Sciences 9 (2019) 5524 uses 0.1 W source/initial UAV power and 0.4 W maximum UAV power. |
 | UavNetSim default RF power | 0.1 W | UavNetSim native | Pinned UavNetSim `TRANSMITTING_POWER`. |
 | UavNetSim data rate | 2 Mbps | UavNetSim native | Pinned UavNetSim 802.11b configuration. |
@@ -43,18 +43,18 @@
 | Neighbor-cache freshness | 5 s | Research adaptation from UavNetSim native behavior | The pinned UavNetSim virtual-force neighbor table uses a 5 s entry lifetime. `u6` mirrors that lifetime in its actor-visible cache; it does not use UavNetSim's table object directly. |
 | Movement + next-hop + transmit-power joint control | yes | Literature-backed concept | MRMG, arXiv:2606.06954, jointly learns UAV movement, next-hop selection and transmit-power control. The exact continuous encoding in `u6` is not copied from MRMG. |
 
-## `u6` calibration evidence after the 3D rewrite
+## `u6` topology calibration status
 
-The literature values above are not treated as automatically optimal. The final full-3D non-learning topology sweep used real persistent UavNetSim, 50 deterministic seeds per radius and 600 s per seed:
+The previous full-3D non-learning topology sweep used real persistent UavNetSim, 50 deterministic seeds per radius and 600 s per seed. It produced the table below **before** the September 2026 networking hardening:
 
-| Fixed candidate radius | Direct node-steps | Multi-hop node-steps | Disconnected node-steps | Mean GCS hops | Mean neighbor degree |
+| Fixed candidate radius | Historical direct node-steps | Historical multi-hop node-steps | Historical disconnected node-steps | Historical mean GCS hops | Historical mean neighbor degree |
 |---:|---:|---:|---:|---:|---:|
 | 1.0 km | 26.2% | 5.1% | 68.6% | 1.20 | 1.97 |
 | 1.5 km | 37.1% | 11.3% | 51.6% | 1.33 | 2.60 |
 | **2.0 km** | **49.3%** | **21.3%** | **29.4%** | **1.41** | **3.11** |
 | 2.5 km | 61.6% | 25.7% | 12.7% | 1.37 | 3.43 |
 
-The 2 km baseline is retained because all three networking states remain substantial rather than because the literature value is assumed to transfer unchanged. A separate 30-step smoke confirmed that the calibration policy actually changes altitude (maximum per-UAV change 83.25 m) while UavNetSim time advances exactly with the 1 s macro-steps.
+These fractions are **not current calibration evidence anymore**. The hardened model now uses native UavNetSim A2A propagation for UAV peers, an Al-Hourani-style A2G model for every link involving the GCS, and a maximum-controllable-power topology snapshot. Because those changes alter connectivity semantics, `contact_range_calibration_status` is `RECALIBRATION_REQUIRED:POST_A2G_POWER_AWARE_HARDENING`. The 2 km value is retained only as the literature-backed development radius until the same 50-seed × 600 s sweep is rerun. A one-seed verification probe after hardening was intentionally not promoted to calibration evidence.
 
 Battery calibration used 50 deterministic 600 s episodes with aggressive random 3D motion and TX disabled to isolate propulsion. With the 77 Wh baseline, mean final swarm battery was **72.68%**, the minimum observed UAV battery was **72.58%**, and **0/50 episodes** had a depleted UAV. This is materially more constraining than the previous 1 MJ placeholder, while not forcing battery death during every 10-minute mission. Radio traffic will add further energy usage and is evaluated separately.
 
@@ -71,10 +71,10 @@ These choices have related literature, but **no source was found that specifies 
 | Vertical acceleration mapping | policy `[-1,1]` mapped to root-paper `a_max` | Reuses a published root constraint with a new control mapping. |
 | Common-base launch pads | six separated pads on a 300 m semicircle | Literature supports a common base; the pad geometry/radius is derived to avoid artificial initial collisions. For six pads spanning -75°..+75° at 30° increments and a 141.4 m minimum separation, the adjacent-chord bound requires `R >= 141.4/(2 sin 15°) = 273.2 m`; 300 m adds a small geometry margin. |
 | Exact GCS coordinate | `[0,2500,0]` | Literature supports an edge base station, not this exact midpoint. |
-| Same 2 km radius for UAV-UAV and UAV-GCS candidate links | yes | A simple project baseline; must be checked by topology calibration. |
+| Same 2 km radius for UAV-UAV and UAV-GCS candidate links | yes | A simple project baseline; current hardened model requires a fresh topology recalibration. |
 | Static victim targets | yes | Retains the post-disaster root-task interpretation; Liu's 3D sensing paper uses moving targets. |
 | Overall sensing-task reward scale | existing `search_reward_coeff=20` | Liu supports the 1.0:0.1 relative weights, not this global scale. |
-| Belief-confirmation tie break | highest posterior, shortest distance, lowest ID | Deterministic project rule for simultaneous confirmations. |
+| Belief fusion and cell confirmation | minimum-entropy posterior per cell is shared across the peer maps; threshold-crossing cells are declared before ground truth is consulted | The accessible Liu description supports belief-map search and the `0.99` threshold, but the exact inter-UAV fusion/communication rule is not sufficiently explicit; this fusion is therefore a deterministic research adaptation. |
 
 ## Parameters still not sourced closely enough
 
@@ -89,7 +89,7 @@ The following are intentionally **not promoted to paper-backed values**:
 | Delivery completion reward | 20 | `RESEARCH_DESIGN_CALIBRATION_REQUIRED` |
 | Per-joule reward cost | 0.001 | `RESEARCH_DESIGN_CALIBRATION_REQUIRED` |
 | Simplified propulsion coefficients (`P0`, blade/frame drag terms) | legacy assumed values | `RESEARCH_ASSUMPTION`; battery capacity is sourced, propulsion coefficients are not |
-| Exact 2 km suitability beyond the tested 50-seed full-3D distribution | sensitivity should still be reported in experiments | `RESEARCH_DESIGN_CALIBRATED`; the 1/1.5/2/2.5 km sweep is retained as evidence |
+| Exact 2 km suitability after A2G/power-aware hardening | rerun the 1/1.5/2/2.5 km 50-seed × 600 s sweep and report sensitivity | `RECALIBRATION_REQUIRED`; the old sweep is historical only |
 | 600 s sufficiency for learning/evaluation conclusions | topology calibration covers this horizon, but task-learning sensitivity remains advisable | literature-backed development horizon, not a root-paper constant |
 
 A citation to an unrelated scenario is not enough to make these values valid. They should be calibrated/swept, replaced by a more faithful subsystem model, or left visibly assumed.
@@ -110,7 +110,7 @@ These are intentionally not silently replaced just because a related paper conta
 | 300 m launch radius | No paper dictates 300 m. It is a deterministic geometry consequence of six same-base UAVs plus the sourced 141.4 m safety distance. | Same exact launch point (GLIDE-style), random launch disk, separate pads. | Keep 300 m because it prevents an artificial t=0 collision while preserving a common staging site; it is derived, not paper-explicit. |
 | 5-cell FOV footprint = center + N/S/E/W | Liu et al. publish FOV *size* 5 but the parsed text does not prescribe this exact footprint. | Cross footprint, square/diamond footprint, or continuous conic projection. | Keep the cross for a deterministic discrete-grid baseline; continuous cone geometry is the preferred future sensing-realism option. |
 | 6-D continuous hybrid action | No single paper uses exactly `[horizontal thrust, heading, vertical accel, TX gate, TX power, recipient]`. | MRMG uses movement + next-hop + power; maritime SAR uses communication gating; GLIDE gives continuous 3-D acceleration. | Keep the synthesis because it lets MASAC/MATD3/MADDPG share one interface; document it as a new adaptation and later compare with a hybrid/discrete actor if necessary. |
-| Same 2 km candidate radius for UAV-UAV and UAV-GCS | The 2 km value is literature-backed and calibrated, but equality of A2A/A2G ranges is a simplification. | Separate A2A/A2G propagation/radii; pure SINR/rate connectivity without a hard radius. | Keep equal radii for the first baseline because the 200-episode sweep is already calibrated; separate A2A/A2G is the strongest networking ablation. |
+| Same 2 km candidate radius for UAV-UAV and UAV-GCS | The 2 km value is literature-backed but requires recalibration after the networking hardening; equality of the geometric candidate radii is still a simplification. Propagation is now separated: native UavNetSim A2A for peers and Al-Hourani-style urban A2G for GCS links. | Separate A2A/A2G candidate radii, or remove the hard radius and use pure SINR/rate connectivity. | Keep the equal 2 km candidate envelope for the current baseline so prior topology calibration remains comparable; radius asymmetry remains a useful networking sensitivity study. |
 | 600 s episode | It has SAR precedent and has been used for full-3D topology/battery calibration, but that does not prove learning conclusions are horizon-invariant. | 300/600/900/1200 s horizons or terminate when all reports are delivered. | Retain 600 s development baseline and include horizon sensitivity for final paper evaluation. |
 
 ### Propulsion-model note
