@@ -147,6 +147,35 @@ def test_uavnetsim_full_slot_request_accounts_for_csma_and_header_overhead():
     assert 0.0 < result.byte_pdr <= 1.0
 
 
+def test_uavnetsim_reports_only_the_longest_in_order_delivered_prefix():
+    import importlib.util
+
+    if importlib.util.find_spec("simpy") is None or importlib.util.find_spec("phy.channel") is None:
+        pytest.skip("pinned UavNetSim optional dependency is not installed")
+
+    cfg = load_config("masac", "u6")
+    backend = UavNetSimBackend(cfg, seed=1)
+    positions = np.array(
+        [[100.0, 100.0, 100.0], [120.0, 100.0, 100.0],
+         [4500.0, 4500.0, 100.0], [4600.0, 4500.0, 100.0],
+         [4500.0, 4600.0, 100.0], [4600.0, 4600.0, 100.0]],
+        dtype=float,
+    )
+    result = backend.transmit(
+        [TransmissionIntent(sender=1, recipient=0, requested_bytes=250_000, tx_power_w=0.1)],
+        positions,
+        np.array([0.0, 100.0, 0.0], dtype=float),
+        np.empty((0, 3), dtype=float),
+        dt_s=1.0,
+        step_index=0,
+    )
+
+    outcome = result.outcomes[0]
+    delivered_prefix = getattr(outcome, "delivered_prefix_bytes", outcome.delivered_bytes)
+    assert 0 < delivered_prefix < outcome.delivered_bytes
+    assert delivered_prefix == 1024
+
+
 def test_uavnetsim_native_ack_is_enabled_and_policy_recipient_is_preserved():
     import importlib.util
 

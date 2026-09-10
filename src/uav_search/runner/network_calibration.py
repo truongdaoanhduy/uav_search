@@ -9,7 +9,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from uav_search.config import load_config
+from uav_search.config import RESEARCH_SCENARIOS, load_config
 from uav_search.envs.paper_env import PaperUAVEnv
 
 
@@ -24,7 +24,7 @@ def tx_power_to_action(power_w: float, minimum_w: float, maximum_w: float) -> fl
 
 
 class RandomWaypointCalibrationPolicy:
-    """Deterministic-by-seed non-learning policy used only to exercise u6 topology."""
+    """Deterministic-by-seed non-learning policy for homogeneous research topology."""
 
     def __init__(self, env: PaperUAVEnv, seed: int, tx_power_w: float, traffic: bool = False):
         self.rng = np.random.default_rng(int(seed))
@@ -88,9 +88,13 @@ def run_calibration_episode(
     steps: int = 600,
     tx_power_w: float = 0.1,
     traffic: bool = False,
+    scenario: str = "u6",
 ) -> dict[str, Any]:
-    """Run one non-learning u6 episode with the real UavNetSim backend."""
-    cfg = deepcopy(load_config("masac", "u6"))
+    """Run one non-learning U6/U9 episode with the real UavNetSim backend."""
+    scenario = str(scenario).lower()
+    if scenario not in RESEARCH_SCENARIOS:
+        raise ValueError(f"scenario must be one of {RESEARCH_SCENARIOS}; got {scenario!r}")
+    cfg = deepcopy(load_config("masac", scenario))
     cfg["scenario"]["network_backend"] = "uavnetsim"
     cfg["scenario"]["peer_contact_range_m"] = float(contact_range_m)
     cfg["scenario"]["gcs_contact_range_m"] = float(contact_range_m)
@@ -141,6 +145,7 @@ def run_calibration_episode(
 
     node_steps = max(1, direct + multihop + disconnected)
     return {
+        "scenario": scenario,
         "contact_range_m": float(contact_range_m),
         "seed": int(seed),
         "requested_steps": int(steps),
@@ -180,12 +185,13 @@ def run_calibration_episode(
 
 
 def summarize_calibration(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[float, list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, float], list[dict[str, Any]]] = {}
     for row in rows:
-        groups.setdefault(float(row["contact_range_m"]), []).append(row)
+        scenario = str(row.get("scenario", "u6"))
+        groups.setdefault((scenario, float(row["contact_range_m"])), []).append(row)
 
     summary: list[dict[str, Any]] = []
-    for contact_range, group in sorted(groups.items()):
+    for (scenario, contact_range), group in sorted(groups.items()):
         direct = sum(int(r["direct_node_steps"]) for r in group)
         multihop = sum(int(r["multihop_node_steps"]) for r in group)
         disconnected = sum(int(r["disconnected_node_steps"]) for r in group)
@@ -199,6 +205,7 @@ def summarize_calibration(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]
         delay_sum = sum(float(r["delay_weighted_sum"]) for r in group)
         total_time = sum(float(r["network_sim_time_s"]) for r in group)
         summary.append({
+            "scenario": scenario,
             "contact_range_m": float(contact_range),
             "episodes": int(len(group)),
             "direct_fraction": float(direct / node_steps),

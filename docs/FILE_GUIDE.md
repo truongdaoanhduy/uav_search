@@ -23,7 +23,7 @@ uav_search/
 
 **`algorithms/*.yaml`** — only algorithm-specific hyperparameters. Adding a new baseline later should generally start here plus one algorithm module.
 
-**`scenarios/*.yaml`** — swarm/target/obstacle counts. `f*_m*` files are paper-reproduction scenarios; `u6.yaml` is the homogeneous peer research adaptation and contains per-field provenance for altitude/sensing, GCS, DTN, RF, battery and calibration-required parameters.
+**`scenarios/*.yaml`** — swarm/target/obstacle counts. `f*_m*` files are paper-reproduction scenarios; `u6.yaml` and `u9.yaml` are the active homogeneous peer research scales and contain per-field provenance for altitude/sensing, GCS, DTN, RF, battery and calibration-required parameters.
 
 ## `src/uav_search/envs/`
 
@@ -33,7 +33,7 @@ uav_search/
 
 **`sensing.py`** — pure altitude-aware sensing primitives: low/mid/high profile selection, fixed 1/5/9-cell FOV footprints, Bayesian occupancy update and binary entropy. Keeping these functions pure makes sensing tests deterministic and separates paper-derived sensor parameters from environment control logic.
 
-**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the paper-equation peer channel for regression/ablation while honoring the fixed `u6` candidate radius. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and keeps one SimPy/channel/node set alive per episode. UAV-to-UAV links retain native UavNetSim A2A propagation; any data/ACK pair involving the synthetic GCS uses the configured Al-Hourani-style urban A2G gain. MARL owns transmit gating, transmit power and immediate next-hop selection; UavNetSim supplies CSMA/CA, PHY/channel delivery, native ACK/ARQ retries, delay/PDR/throughput and per-UAV radio TX energy. RF power affects PHY inside the fixed candidate radius but does not expand that radius, while the actor topology snapshot is evaluated at the maximum controllable RF power so feasible high-power links are not hidden.
+**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the paper-equation peer channel for regression/ablation while honoring each scenario's fixed candidate radius. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and keeps one SimPy/channel/node set alive per episode. UAV-to-UAV links retain native UavNetSim A2A propagation; any data/ACK pair involving the synthetic GCS uses the configured Al-Hourani-style urban A2G gain. MARL owns transmit gating, transmit power and immediate next-hop selection; UavNetSim supplies CSMA/CA, PHY/channel delivery, native ACK/ARQ retries, delay/PDR/throughput and per-UAV radio TX energy. Link metrics count all ACKed packets, while application state advances only through the longest ACKed contiguous payload prefix. RF power affects PHY inside the fixed candidate radius but does not expand that radius, while the actor topology snapshot is evaluated at the maximum controllable RF power so feasible high-power links are not hidden.
 
 ## `src/uav_search/algorithms/`
 
@@ -55,7 +55,7 @@ uav_search/
 
 **`train.py`** — experiment orchestration: seeds, env → policy → replay → update loop, best/final/crash checkpoint, episode/update metrics, post-training deterministic rollout, summary and plot generation.
 
-**`network_calibration.py`** — non-learning `u6` calibration runner. It drives deterministic-by-seed **3D** random-waypoint motion (including altitude changes across the configured flight levels) through the real UavNetSim backend and aggregates direct/multi-hop/disconnected node-step fractions, GCS hops, neighbor degree, and optional traffic metrics across seeds/ranges.
+**`network_calibration.py`** — non-learning `u6`/`u9` calibration runner. It drives deterministic-by-seed **3D** random-waypoint motion (including altitude changes across the configured flight levels) through the real UavNetSim backend and aggregates direct/multi-hop/disconnected node-step fractions, GCS hops, neighbor degree, and optional traffic metrics across seeds/ranges.
 
 **`evaluate.py`** — reload a checkpoint and evaluate it over arbitrary random test cases.
 
@@ -75,7 +75,7 @@ uav_search/
 
 **`run_u6.py`** — run MASAC, MATD3 and MADDPG sequentially on the homogeneous `u6` joint search/networking scenario; default deterministic seed is 44.
 
-**`calibrate_u6_network.py`** — run the Phase-B no-learning topology calibration grid with real UavNetSim; defaults to 50 seeds × 600 steps over 1.0/1.5/2.0/2.5 km fixed candidate radii and writes CSV/JSON under `runs/`. Use `--traffic` only when packet-level PDR/delay/energy calibration is desired.
+**`calibrate_u6_network.py`** — backward-compatible calibration CLI for both active research scales via `--scenario u6|u9`; defaults to 50 seeds × 600 steps over 1.0/1.5/2.0/2.5 km fixed candidate radii and writes CSV/JSON under `runs/calibration/<scenario>-network/`. Use `--traffic` only when packet-level PDR/delay/energy calibration is desired.
 
 **`evaluate.py`** — multi-case checkpoint evaluation.
 

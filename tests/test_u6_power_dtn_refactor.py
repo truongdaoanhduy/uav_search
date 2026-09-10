@@ -158,13 +158,17 @@ def test_neighbor_freshness_does_not_treat_reverse_only_link_as_live():
     env.neighbor_cache_seen_step[0, 1] = 0
     env.neighbor_cache_positions[0, 1] = env.positions[1]
     env.neighbor_cache_battery[0, 1] = env.battery_pct[1]
-    env.step_count = 1
+    # One completed unsynchronized transition after the fully fresh returned
+    # state: age=1 at t=2, so the five-step cache has freshness 0.8.
+    env.step_count = 2
     env.last_adjacency.fill(0)
-    env.last_adjacency[1, 0] = 1  # UAV0 -> UAV1 only; UAV1 cannot update UAV0.
+    baseline_freshness = float(env._observations()["uav_0"][14])
 
-    obs = env._observations()["uav_0"]
-    freshness = float(obs[14])  # first peer slot = indices 9:15
-    assert 0.0 < freshness < 1.0
+    env.last_adjacency[1, 0] = 1  # UAV0 -> UAV1 only; UAV1 cannot update UAV0.
+    reverse_link_freshness = float(env._observations()["uav_0"][14])
+
+    assert baseline_freshness == pytest.approx(0.8)
+    assert reverse_link_freshness == pytest.approx(baseline_freshness)
 
 
 def test_report_lifetime_is_measured_in_seconds_not_hardcoded_steps():

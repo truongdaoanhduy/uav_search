@@ -8,9 +8,10 @@ from uav_search.config import load_config
 from uav_search.envs.paper_env import PaperUAVEnv
 
 
+@pytest.mark.parametrize("scenario", ["u6", "u9"])
 @pytest.mark.parametrize("name", ["maddpg", "matd3", "masac"])
-def test_algorithms_support_homogeneous_u6_six_dimensional_action(name):
-    cfg = deepcopy(load_config(name, "u6"))
+def test_algorithms_support_homogeneous_research_six_dimensional_action(name, scenario):
+    cfg = deepcopy(load_config(name, scenario))
     cfg["scenario"]["network_backend"] = "analytical"
     cfg["runtime"]["batch_size"] = 4
     cfg["runtime"]["replay_size"] = 32
@@ -21,7 +22,7 @@ def test_algorithms_support_homogeneous_u6_six_dimensional_action(name):
     algo = make_algorithm(name, env, cfg, device="cpu", seed=44)
 
     action = algo.act(obs, explore=False)
-    assert action.shape == (6, 6)
+    assert action.shape == (env.n_agents, 6)
     assert np.isfinite(action).all()
 
     rng = np.random.default_rng(44)

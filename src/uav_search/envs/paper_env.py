@@ -201,6 +201,29 @@ class PaperUAVEnv:
             "increase launch_radius_m or reduce initial_min_separation_m"
         )
 
+    def _sample_peer_targets(self) -> np.ndarray:
+        """Sample peer targets with at most one target per binary belief cell."""
+        if self.n_targets <= 0:
+            return np.empty((0, 2), dtype=np.float64)
+        if self.n_targets > self.peer_sensing_grid_n * self.peer_sensing_grid_n:
+            raise ValueError("number of targets exceeds available sensing-grid cells")
+
+        targets: list[np.ndarray] = []
+        occupied_cells: set[tuple[int, int]] = set()
+        max_attempts = max(10_000, 100 * self.n_targets)
+        for _ in range(max_attempts):
+            candidate = self.rng.uniform(0.0, self.area_size_m, size=2).astype(np.float64)
+            x = int(np.clip(math.floor(candidate[0] / self.peer_sensing_grid_cell_m), 0, self.peer_sensing_grid_n - 1))
+            y = int(np.clip(math.floor(candidate[1] / self.peer_sensing_grid_cell_m), 0, self.peer_sensing_grid_n - 1))
+            cell = (y, x)
+            if cell in occupied_cells:
+                continue
+            occupied_cells.add(cell)
+            targets.append(candidate)
+            if len(targets) == self.n_targets:
+                return np.stack(targets, axis=0)
+        raise RuntimeError("Unable to sample unique target belief cells")
+
     def _sample_peer_obstacles(self) -> np.ndarray:
         """Sample valid peer-scenario obstacle circles with deterministic rejection sampling."""
         if self.n_obstacles <= 0:
@@ -273,7 +296,11 @@ class PaperUAVEnv:
             )
         self.battery_pct = np.full(self.n_agents, 100.0, dtype=np.float64)
         self.uav_active = np.ones(self.n_agents, dtype=bool)
-        self.targets = self.rng.uniform(0.0, self.area_size_m, size=(self.n_targets, 2)).astype(np.float64)
+        self.targets = (
+            self._sample_peer_targets()
+            if self.peer_mode
+            else self.rng.uniform(0.0, self.area_size_m, size=(self.n_targets, 2)).astype(np.float64)
+        )
         self.target_found = np.zeros(self.n_targets, dtype=bool)
         if self.peer_mode:
             self.obstacles = self._sample_peer_obstacles()
@@ -312,6 +339,10 @@ class PaperUAVEnv:
             self.last_tx_success = np.zeros(self.n_agents, dtype=bool)
             self.last_delivery_reward_by_agent = np.zeros(self.n_agents, dtype=np.float64)
             self.target_known_by_agent = np.zeros((self.n_agents, self.n_targets), dtype=bool)
+            # Persistent provenance for report generation: unlike
+            # target_known_by_agent, this is never copied by peer sync. It marks
+            # targets this UAV independently confirmed from its own sensing.
+            self.target_directly_confirmed_by_agent = np.zeros((self.n_agents, self.n_targets), dtype=bool)
             self.belief_maps = np.full(
                 (self.n_agents, self.peer_sensing_grid_n, self.peer_sensing_grid_n),
                 self.peer_belief_prior,
@@ -736,16 +767,15 @@ class PaperUAVEnv:
                     continue
                 if self.peer_mode:
                     seen = int(self.neighbor_cache_seen_step[i, j])
-                    if seen >= 0:
+                    # A sync received during slot ``seen`` is fully fresh in the
+                    # returned state after that slot. Each later unsynchronized
+                    # transition consumes one TTL step; expired entries are masked
+                    # completely so actors cannot use indefinitely stale state.
+                    age = max(0, int(self.step_count) - seen - 1) if seen >= 0 else self.peer_neighbor_cache_ttl_steps
+                    if seen >= 0 and age < self.peer_neighbor_cache_ttl_steps:
                         cached_pos = self.neighbor_cache_positions[i, j]
                         d_ij = float(np.linalg.norm(cached_pos - self.positions[i])) / area
-                        age = max(0, int(self.step_count) - seen)
-                        # Freshness reflects the age of the last successfully
-                        # received synchronization bundle only. Current topology
-                        # alone must not upgrade stale peer knowledge to "live".
-                        freshness = max(
-                            0.0, 1.0 - age / float(self.peer_neighbor_cache_ttl_steps)
-                        )
+                        freshness = 1.0 - age / float(self.peer_neighbor_cache_ttl_steps)
                         other.extend([
                             d_ij,
                             cached_pos[0] / area,
@@ -810,8 +840,11 @@ class PaperUAVEnv:
         return float(self.peer_tx_power_min_w + x * (self.peer_tx_power_max_w - self.peer_tx_power_min_w))
 
     def _enqueue_report(self, source: int, target_idx: int) -> bool:
-        """Create one report when buffer space exists; otherwise keep it pending."""
+        """Create one report when an active source has buffer space; otherwise keep it pending."""
         if not self.peer_mode or self.report_generated[target_idx] or self.report_expired[target_idx]:
+            return False
+        source = int(source)
+        if source < 0 or source >= self.n_agents or not self.uav_active[source]:
             return False
         room = max(0, self.peer_buffer_bytes - int(self.queue_bytes[source]))
         if room < self.peer_report_bytes:
@@ -827,8 +860,24 @@ class PaperUAVEnv:
             return
         for target_idx in range(self.n_targets):
             source = int(self.pending_report_source[target_idx])
-            if source >= 0 and self.target_found[target_idx] and not self.report_generated[target_idx]:
-                self._enqueue_report(source, target_idx)
+            if source < 0 or not self.target_found[target_idx] or self.report_generated[target_idx]:
+                continue
+
+            # Prefer the original detector while it is active, then any other
+            # active UAV that independently confirmed the target. Peer-shared
+            # metadata alone is deliberately insufficient to synthesize a new
+            # full mission report payload.
+            candidates: list[int] = []
+            if 0 <= source < self.n_agents and self.uav_active[source]:
+                candidates.append(source)
+            independent = np.flatnonzero(
+                self.uav_active & self.target_directly_confirmed_by_agent[:, target_idx]
+            )
+            candidates.extend(int(i) for i in independent if int(i) not in candidates)
+            for candidate in candidates:
+                if self._enqueue_report(candidate, target_idx):
+                    self.pending_report_source[target_idx] = candidate
+                    break
 
     def _expire_reports(self) -> None:
         if not self.peer_mode:
@@ -878,6 +927,13 @@ class PaperUAVEnv:
                     self.last_positive_sensor_observations_by_agent[agent_idx] += 1
                     for target_idx in targets_by_cell.get((y, x), []):
                         self.last_sensor_positive[agent_idx, target_idx] = True
+                        # Actor knowledge must also reflect an independent local
+                        # confirmation even if another UAV confirmed this target
+                        # earlier. Global mission bookkeeping must not suppress
+                        # what this UAV has actually sensed for itself.
+                        if posterior >= self.peer_target_confirmation_threshold:
+                            self.target_known_by_agent[agent_idx, target_idx] = True
+                            self.target_directly_confirmed_by_agent[agent_idx, target_idx] = True
 
         self.total_scanned_cells += int(self.last_scanned_cells_by_agent.sum())
         self.total_positive_sensor_observations += int(self.last_positive_sensor_observations_by_agent.sum())
@@ -969,22 +1025,42 @@ class PaperUAVEnv:
             recipient = int(outcome.recipient)
             self.last_selected_tx_rate_bps[sender] = float(outcome.rate_bps)
             self.last_selected_tx_distance_m[sender] = float(outcome.distance_m)
-            self.last_tx_success[sender] = bool(outcome.success)
             delivered = max(0, int(outcome.delivered_bytes))
+            delivered_prefix = getattr(outcome, "delivered_prefix_bytes", None)
+            # Network metrics count every ACKed packet, including packets received
+            # after a gap. Application state can commit only the contiguous prefix.
+            application_delivered = (
+                delivered
+                if delivered_prefix is None
+                else min(delivered, max(0, int(delivered_prefix)))
+            )
+            peer_sync_complete = bool(
+                application_delivered >= self.peer_sync_bytes
+                and 0 <= recipient < self.n_agents
+                and self.uav_active[recipient]
+            )
+            # ``TransmissionOutcome.success`` means that at least one byte reached
+            # the link endpoint. Actor-visible TX success instead requires usable
+            # in-order application data (and a complete bundle for peer sync).
+            self.last_tx_success[sender] = bool(
+                application_delivered > 0
+                if recipient == GCS_RECIPIENT
+                else peer_sync_complete
+            )
 
             if recipient == GCS_RECIPIENT:
-                remaining = delivered
+                remaining = application_delivered
             else:
                 # The synchronization bundle is conceptually first in the frame.
                 # Partial bundle delivery is not enough to refresh actor knowledge.
-                if delivered >= self.peer_sync_bytes and 0 <= recipient < self.n_agents and self.uav_active[recipient]:
+                if peer_sync_complete:
                     self.neighbor_cache_positions[recipient, sender] = position_slot_start[sender]
                     self.neighbor_cache_battery[recipient, sender] = battery_slot_start[sender]
                     self.neighbor_cache_seen_step[recipient, sender] = self.step_count
                     self._fuse_received_peer_belief(recipient, belief_slot_start[sender])
                     self.target_known_by_agent[recipient] |= known_slot_start[sender]
                     self.last_peer_syncs += 1
-                remaining = max(0, delivered - self.peer_sync_bytes)
+                remaining = max(0, application_delivered - self.peer_sync_bytes)
 
             for target_idx in range(self.n_targets):
                 if remaining <= 0:

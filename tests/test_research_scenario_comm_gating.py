@@ -1,10 +1,12 @@
 from copy import deepcopy
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from uav_search.config import ACTIVE_SCENARIOS, RESEARCH_SCENARIOS, load_config
 from uav_search.envs.paper_env import PaperUAVEnv
+from uav_search.envs.network_backends import NetworkStepResult, TransmissionOutcome
 
 
 def make_env(scenario: str = "u6", seed: int = 101) -> PaperUAVEnv:
@@ -62,6 +64,13 @@ def test_u9_is_same_research_architecture_with_nine_homogeneous_uavs():
             assert np.linalg.norm(env.positions[i, :2] - env.positions[j, :2]) >= min_sep - 1e-9
 
 
+@pytest.mark.parametrize("scenario", ["u6", "u9"])
+def test_peer_targets_start_in_unique_binary_belief_cells(scenario):
+    env = make_env(scenario=scenario, seed=35)
+    cells = [env._target_grid_cell(k) for k in range(env.n_targets)]
+    assert len(set(cells)) == env.n_targets
+
+
 def test_topology_snapshot_does_not_refresh_actor_neighbor_cache_without_packet():
     env = make_env(seed=103)
     env.neighbor_cache_seen_step.fill(-1)
@@ -102,6 +111,33 @@ def test_successful_peer_sync_refreshes_only_receiver_cache_and_fuses_receiver_b
     assert env.belief_maps[2, y, x] == pytest.approx(0.50)
 
 
+def test_successful_peer_sync_is_fully_fresh_in_returned_observation():
+    env = make_env(seed=110)
+    env.positions[0] = [500.0, 2500.0, 100.0]
+    env.positions[1] = [700.0, 2500.0, 100.0]
+    env._refresh_links()
+    actions = peer_sync_actions(env, sender=0, recipient=1)
+
+    obs, _, _, _, _ = env.step({name: actions[i] for i, name in enumerate(env.agents)})
+
+    # For receiver UAV1, sender UAV0 is the first six-value peer slot.
+    assert env.last_tx_success[0]
+    assert obs["uav_1"][14] == pytest.approx(1.0)
+
+
+def test_expired_peer_cache_masks_stale_state_from_actor_observation():
+    env = make_env(seed=111)
+    env.neighbor_cache_seen_step[1, 0] = 0
+    env.neighbor_cache_positions[1, 0] = [1234.0, 2345.0, 100.0]
+    env.neighbor_cache_battery[1, 0] = 77.0
+    # State t=6 is five completed unsynchronized transitions after slot 0.
+    env.step_count = env.peer_neighbor_cache_ttl_steps + 1
+
+    slot = env._observations()["uav_1"][9:15]
+
+    np.testing.assert_array_equal(slot, np.zeros(6, dtype=np.float32))
+
+
 def test_control_only_peer_sync_cannot_farm_communication_reward():
     env = make_env(seed=106)
     place_single_good_peer_link(env)
@@ -111,6 +147,73 @@ def test_control_only_peer_sync_cannot_farm_communication_reward():
     assert env.last_tx_success[0]
     assert env.last_bytes_transmitted == 0
     assert env._communication_reward(0) == pytest.approx(0.0)
+
+
+def test_partial_peer_sync_is_not_reported_to_actor_as_success(monkeypatch):
+    env = make_env(seed=114)
+    place_single_good_peer_link(env)
+    env.neighbor_cache_seen_step.fill(-1)
+
+    def partial_transmit(intents, *args, **kwargs):
+        intent = intents[0]
+        delivered = env.peer_sync_bytes - 1
+        return NetworkStepResult(
+            outcomes=[TransmissionOutcome(
+                sender=intent.sender, recipient=intent.recipient,
+                requested_bytes=intent.requested_bytes, delivered_bytes=delivered,
+                rate_bps=1_000_000.0, distance_m=100.0,
+            )],
+            attempted_bytes=intent.requested_bytes,
+            delivered_bytes=delivered,
+            byte_pdr=delivered / intent.requested_bytes,
+        )
+
+    monkeypatch.setattr(env.network_backend, "transmit", partial_transmit)
+    env._peer_transmit(peer_sync_actions(env, sender=0, recipient=1))
+
+    assert not env.last_tx_success[0]
+    assert env.neighbor_cache_seen_step[1, 0] == -1
+    assert env.last_peer_syncs == 0
+
+
+def test_out_of_order_packet_acks_do_not_commit_past_first_gap(monkeypatch):
+    env = make_env(seed=115)
+    place_single_good_peer_link(env)
+    env.neighbor_cache_seen_step.fill(-1)
+    assert env._enqueue_report(0, 0)
+    sender_before = int(env.report_buffers[0, 0])
+
+    def out_of_order_transmit(intents, *args, **kwargs):
+        intent = intents[0]
+        # Link-level ACKs include later report packets, but one byte in the
+        # leading synchronization bundle is still missing.
+        delivered = env.peer_sync_bytes + 1024
+        return NetworkStepResult(
+            outcomes=[SimpleNamespace(
+                sender=intent.sender,
+                recipient=intent.recipient,
+                requested_bytes=intent.requested_bytes,
+                delivered_bytes=delivered,
+                delivered_prefix_bytes=env.peer_sync_bytes - 1,
+                rate_bps=1_000_000.0,
+                distance_m=100.0,
+                delay_s=0.1,
+                tx_energy_j=0.0,
+            )],
+            attempted_bytes=intent.requested_bytes,
+            delivered_bytes=delivered,
+            byte_pdr=delivered / intent.requested_bytes,
+        )
+
+    monkeypatch.setattr(env.network_backend, "transmit", out_of_order_transmit)
+    env._peer_transmit(peer_sync_actions(env, sender=0, recipient=1))
+
+    assert not env.last_tx_success[0]
+    assert env.neighbor_cache_seen_step[1, 0] == -1
+    assert env.last_peer_syncs == 0
+    assert env.last_bytes_transmitted == 0
+    assert env.report_buffers[0, 0] == sender_before
+    assert env.report_buffers[0, 1] == 0
 
 
 def test_failed_peer_sync_does_not_refresh_cache_or_belief():
@@ -128,6 +231,80 @@ def test_failed_peer_sync_does_not_refresh_cache_or_belief():
     assert not env.last_tx_success[0]
     assert env.neighbor_cache_seen_step[1, 0] == -1
     assert env.belief_maps[1, y, x] == pytest.approx(0.5)
+
+
+def test_independent_local_confirmation_updates_agent_knowledge_after_global_confirmation():
+    env = make_env(seed=112)
+    y, x = env._target_grid_cell(0)
+    env.confirmed_cells[y, x] = True
+    env.target_found[0] = True
+    env.target_known_by_agent[0, 0] = True
+    env.positions[1, :2] = env.targets[0]
+    env.positions[1, 2] = env.peer_altitude_levels_m[0]
+    env.belief_maps[1, y, x] = 0.95
+
+    class AlwaysPositive:
+        @staticmethod
+        def random():
+            return 0.0
+
+    env.rng = AlwaysPositive()
+    env._perform_peer_target_detection()
+
+    assert env.belief_maps[1, y, x] >= env.peer_target_confirmation_threshold
+    assert env.target_known_by_agent[1, 0]
+
+
+def test_independent_detector_can_replace_depleted_pending_report_source():
+    env = make_env(seed=113)
+    env.peer_buffer_bytes = env.peer_report_bytes
+    env._enqueue_report(0, 1)  # fill UAV0 buffer
+    y, x = env._target_grid_cell(0)
+    env.confirmed_cells[y, x] = True
+    env.target_found[0] = True
+    env.target_known_by_agent[0, 0] = True
+    env.pending_report_source[0] = 0
+    env.positions[1, :2] = env.targets[0]
+    env.positions[1, 2] = env.peer_altitude_levels_m[0]
+    env.belief_maps[1, y, x] = 0.95
+
+    class AlwaysPositive:
+        @staticmethod
+        def random():
+            return 0.0
+
+    env.rng = AlwaysPositive()
+    env._perform_peer_target_detection()
+    assert env.target_known_by_agent[1, 0]
+
+    env.uav_active[0] = False
+    env.battery_pct[0] = 0.0
+    env.report_buffers[1, 0] = 0
+    env.queue_bytes[0] = 0
+    env._retry_pending_reports()
+
+    assert env.report_generated[0]
+    assert env.pending_report_source[0] == 1
+    assert env.report_buffers[0, 1] == env.peer_report_bytes
+
+
+def test_pending_report_is_not_generated_into_a_depleted_detector_buffer():
+    env = make_env(seed=109)
+    env.peer_buffer_bytes = env.peer_report_bytes
+    env._enqueue_report(0, 1)
+    env.target_found[0] = True
+    env.target_known_by_agent[0, 0] = True
+    env.pending_report_source[0] = 0
+    assert not env._enqueue_report(0, 0)
+
+    env.uav_active[0] = False
+    env.battery_pct[0] = 0.0
+    env.report_buffers[1, 0] = 0
+    env.queue_bytes[0] = 0
+    env._retry_pending_reports()
+
+    assert not env.report_generated[0]
+    assert env.report_buffers[0, 0] == 0
 
 
 def test_peer_belief_sync_is_at_most_one_hop_per_macro_step():

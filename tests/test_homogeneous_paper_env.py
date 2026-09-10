@@ -277,7 +277,9 @@ def test_peer_observation_hides_live_remote_state_and_uses_stale_cache():
     # if UAV1's state was received in a successful earlier synchronization.
     env.neighbor_cache_positions[0, 1] = env.positions[1]
     env.neighbor_cache_battery[0, 1] = env.battery_pct[1]
-    env.neighbor_cache_seen_step[0, 1] = env.step_count
+    # Model a sync delivered in slot 0 and observed in the returned state t=1.
+    env.neighbor_cache_seen_step[0, 1] = 0
+    env.step_count = 1
     first = env._observations()["uav_0"].copy()
     # Neighbor UAV1 occupies the first six-value neighbor slot.
     slot = first[9:15]

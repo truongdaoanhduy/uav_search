@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from uav_search.config import RESEARCH_SCENARIOS
 from uav_search.runner.network_calibration import (
     run_calibration_episode,
     summarize_calibration,
@@ -12,7 +13,8 @@ from uav_search.runner.network_calibration import (
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Non-learning multi-seed topology/network calibration for u6 using real UavNetSim.")
+    parser = argparse.ArgumentParser(description="Non-learning multi-seed topology/network calibration for U6/U9 using real UavNetSim.")
+    parser.add_argument("--scenario", choices=RESEARCH_SCENARIOS, default="u6")
     parser.add_argument(
         "--ranges", nargs="+", type=float, default=[1000.0, 1500.0, 2000.0, 2500.0],
         help="Fixed peer/GCS one-hop candidate radii in meters; RF power does not enlarge these radii.",
@@ -25,7 +27,7 @@ def main() -> None:
         help="Fixed transmit power used by the optional --traffic policy; it affects PHY behavior only inside the selected candidate radius.",
     )
     parser.add_argument("--traffic", action="store_true", help="Enable natural TargetReport traffic; topology-only is the default.")
-    parser.add_argument("--output-dir", type=Path, default=Path("runs/calibration/u6-network"))
+    parser.add_argument("--output-dir", type=Path, default=None)
     args = parser.parse_args()
 
     rows = []
@@ -37,22 +39,24 @@ def main() -> None:
                 steps=args.steps,
                 tx_power_w=args.tx_power_w,
                 traffic=args.traffic,
+                scenario=args.scenario,
             )
             rows.append(row)
             pdr_text = "n/a" if row["byte_pdr"] is None else f"{row['byte_pdr']:.3f}"
             print(
-                f"range={contact_range:.0f}m seed={seed} steps={row['executed_steps']} "
+                f"scenario={args.scenario} range={contact_range:.0f}m seed={seed} steps={row['executed_steps']} "
                 f"direct={row['direct_fraction']:.3f} multi={row['multihop_fraction']:.3f} "
                 f"disc={row['disconnected_fraction']:.3f} pdr={pdr_text}"
             )
 
     summary = summarize_calibration(rows)
-    csv_path, json_path = write_calibration_outputs(rows, summary, args.output_dir)
+    output_dir = args.output_dir or Path(f"runs/calibration/{args.scenario}-network")
+    csv_path, json_path = write_calibration_outputs(rows, summary, output_dir)
     print("\nSummary")
     for row in summary:
         pdr_text = "n/a" if row["byte_pdr"] is None else f"{row['byte_pdr']:.3f}"
         print(
-            f"range={row['contact_range_m']:.0f}m n={row['episodes']} "
+            f"scenario={row['scenario']} range={row['contact_range_m']:.0f}m n={row['episodes']} "
             f"direct={row['direct_fraction']:.3f} multi={row['multihop_fraction']:.3f} "
             f"disc={row['disconnected_fraction']:.3f} hops={row['mean_gcs_hops']:.2f} "
             f"degree={row['mean_neighbor_degree']:.2f} pdr={pdr_text}"

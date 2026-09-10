@@ -41,6 +41,9 @@ class TransmissionOutcome:
     distance_m: float
     delay_s: float = 0.0
     tx_energy_j: float = 0.0
+    # Longest ACKed application payload prefix. ``delivered_bytes`` remains the
+    # link-level total and can include packets received after an earlier gap.
+    delivered_prefix_bytes: int | None = None
 
     @property
     def success(self) -> bool:
@@ -258,6 +261,7 @@ class AnalyticalNetworkBackend:
                 distance_m=distance,
                 delay_s=delay,
                 tx_energy_j=energy,
+                delivered_prefix_bytes=sent,
             ))
         return NetworkStepResult(
             outcomes=outcomes,
@@ -871,6 +875,7 @@ class UavNetSimBackend:
             )
 
         packets: dict[int, tuple[Any, TransmissionIntent, int, int]] = {}
+        packet_chunks_by_intent: dict[tuple[int, int], list[tuple[int, int]]] = {}
         phy_failures_before = int(metrics.phy_failures)
         event_start = len(event_bus.events)
         with self._with_radio_parameters() as ucfg:
@@ -910,6 +915,7 @@ class UavNetSimBackend:
                     "rate": nominal_rate,
                     "tx_power_w": tx_power_w,
                 }
+                packet_chunks_by_intent.setdefault(key_meta, [])
                 remaining = min(int(intent.requested_bytes), max(0, max_payload_bits // 8))
                 while remaining > 0:
                     payload_bytes = min(remaining, packet_payload_bytes)
@@ -935,6 +941,7 @@ class UavNetSimBackend:
                     proc = env.process(simulator.drones[sender].mac_protocol.mac_send(packet))
                     simulator.drones[sender].mac_process_dict[mac_key] = proc
                     packets[packet_id] = (packet, intent, recipient, payload_bytes)
+                    packet_chunks_by_intent[key_meta].append((packet_id, payload_bytes))
                     remaining -= payload_bytes
 
             slot_end_us = float(env.now) + float(dt_s) * 1e6
@@ -952,7 +959,15 @@ class UavNetSimBackend:
                 if event_type == "packet_ack_received" and int(data.get("packet_id", -1)) in packets
             }
             delivered_by_intent: dict[tuple[int, int], int] = {key: 0 for key in intent_meta}
+            delivered_prefix_by_intent: dict[tuple[int, int], int] = {}
             delay_by_intent: dict[tuple[int, int], list[float]] = {key: [] for key in intent_meta}
+            for key_meta, chunks in packet_chunks_by_intent.items():
+                prefix_bytes = 0
+                for packet_id, payload_bytes in chunks:
+                    if packet_id not in success_events:
+                        break
+                    prefix_bytes += int(payload_bytes)
+                delivered_prefix_by_intent[key_meta] = prefix_bytes
             for packet_id, (packet, intent, _recipient, payload_bytes) in packets.items():
                 success_event = success_events.get(packet_id)
                 if success_event is None:
@@ -1006,6 +1021,7 @@ class UavNetSimBackend:
                     distance_m=float(meta["distance"]),
                     delay_s=delay_s,
                     tx_energy_j=energy_j,
+                    delivered_prefix_bytes=int(delivered_prefix_by_intent.get(key_meta, 0)),
                 ))
 
         return NetworkStepResult(

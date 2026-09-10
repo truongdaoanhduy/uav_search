@@ -53,6 +53,20 @@ def test_calibration_episode_uses_real_uavnetsim_and_advances_full_macro_time():
     assert row["mean_delay_s"] is None
 
 
+def test_calibration_episode_supports_u9_research_scale():
+    row = run_calibration_episode(
+        scenario="u9", contact_range_m=2000.0, seed=44, steps=1, tx_power_w=0.1
+    )
+    assert row["scenario"] == "u9"
+    assert row["network_backend"] == "uavnetsim"
+    assert row["executed_steps"] == 1
+    assert (
+        row["direct_node_steps"]
+        + row["multihop_node_steps"]
+        + row["disconnected_node_steps"]
+    ) == 9
+
+
 def test_summary_and_outputs_are_machine_readable(tmp_path):
     rows = [
         {
