@@ -620,16 +620,21 @@ class PaperUAVEnv:
         return patch
 
     def _fuse_peer_beliefs(self) -> None:
-        """Share the lowest-uncertainty posterior for every grid cell across the swarm."""
+        """Share the lowest-uncertainty posterior from active UAVs only."""
         if not self.peer_mode:
             return
-        beliefs = np.clip(self.belief_maps, 0.0, 1.0)
+        active_indices = np.flatnonzero(self.uav_active)
+        if active_indices.size == 0:
+            self.belief_source_map.fill(-1)
+            return
+        beliefs = np.clip(self.belief_maps[active_indices], 0.0, 1.0)
         entropy = np.zeros_like(beliefs, dtype=np.float64)
         interior = (beliefs > 0.0) & (beliefs < 1.0)
         p = beliefs[interior]
         entropy[interior] = -(p * np.log2(p) + (1.0 - p) * np.log2(1.0 - p))
-        source = np.argmin(entropy, axis=0).astype(np.int64)
-        fused = np.take_along_axis(beliefs, source[None, :, :], axis=0)[0]
+        source_local = np.argmin(entropy, axis=0).astype(np.int64)
+        source = active_indices[source_local]
+        fused = np.take_along_axis(beliefs, source_local[None, :, :], axis=0)[0]
         self.belief_source_map[...] = source
         self.belief_maps[...] = fused[None, :, :]
 
@@ -638,6 +643,9 @@ class PaperUAVEnv:
         if not self.peer_mode:
             return
         self.last_false_confirmations = 0
+        if not np.any(self.uav_active):
+            self.belief_source_map.fill(-1)
+            return
         self._fuse_peer_beliefs()
         threshold = self.peer_target_confirmation_threshold
         fused = self.belief_maps[0]

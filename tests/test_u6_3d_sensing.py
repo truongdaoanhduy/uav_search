@@ -193,3 +193,34 @@ def test_true_target_confirmation_is_driven_by_confirmed_cell_and_tracks_source(
     assert env.target_found[0]
     assert env.pending_report_source[0] == 3
     assert env.target_known_by_agent[3, 0]
+
+
+def test_inactive_uav_belief_cannot_drive_fusion_or_target_confirmation():
+    env = make_env(seed=93)
+    env.reset(seed=93)
+    y, x = put_target_in_uav_cell(env, agent_idx=0, target_idx=0)
+    env.belief_maps[:, y, x] = 0.5
+    env.belief_maps[0, y, x] = env.peer_target_confirmation_threshold + 1e-4
+    env.uav_active[0] = False
+    env.battery_pct[0] = 0.0
+
+    env._confirm_peer_targets()
+
+    assert not env.target_found[0]
+    assert env.belief_source_map[y, x] != 0
+    np.testing.assert_allclose(env.belief_maps[:, y, x], 0.5)
+
+
+def test_no_target_or_cell_confirmation_occurs_when_all_uavs_are_inactive():
+    env = make_env(seed=94)
+    env.reset(seed=94)
+    y, x = put_target_in_uav_cell(env, agent_idx=0, target_idx=0)
+    env.belief_maps[:, y, x] = env.peer_target_confirmation_threshold + 1e-4
+    env.uav_active[:] = False
+    env.battery_pct[:] = 0.0
+
+    env._confirm_peer_targets()
+
+    assert not env.confirmed_cells[y, x]
+    assert not env.target_found[0]
+    assert env.belief_source_map[y, x] == -1
