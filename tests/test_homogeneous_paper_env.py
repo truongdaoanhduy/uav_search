@@ -273,6 +273,11 @@ def test_peer_observation_hides_live_remote_state_and_uses_stale_cache():
     env.obstacles[:, :2] = [4900.0, 4900.0]
     env.obstacles[:, 2] = 10.0
     env._refresh_links()
+    # Link availability alone is not an information exchange. Seed the cache as
+    # if UAV1's state was received in a successful earlier synchronization.
+    env.neighbor_cache_positions[0, 1] = env.positions[1]
+    env.neighbor_cache_battery[0, 1] = env.battery_pct[1]
+    env.neighbor_cache_seen_step[0, 1] = env.step_count
     first = env._observations()["uav_0"].copy()
     # Neighbor UAV1 occupies the first six-value neighbor slot.
     slot = first[9:15]
@@ -400,12 +405,12 @@ def test_generated_report_expires_after_ttl_and_frees_buffer():
     assert env.expired_reports == 1
 
 
-def test_neighbor_cache_respects_directed_receiver_transmitter_semantics(monkeypatch):
+def test_topology_snapshot_never_refreshes_neighbor_cache_by_itself(monkeypatch):
     env = make_env(seed=27)
     env.reset(seed=27)
     env.neighbor_cache_seen_step.fill(-1)
     adjacency = np.zeros((env.n_agents, env.n_agents), dtype=np.int8)
-    # Only UAV0 -> UAV1 is usable: adjacency[receiver=1, transmitter=0] = 1.
+    # Even a usable directed UAV0 -> UAV1 edge is only a transmission candidate.
     adjacency[1, 0] = 1
     pair_rates = adjacency.astype(float) * (float(env.paper["min_comm_rate_bps"]) + 1.0)
     snapshot = NetworkLinkSnapshot(
@@ -415,8 +420,8 @@ def test_neighbor_cache_respects_directed_receiver_transmitter_semantics(monkeyp
     )
     monkeypatch.setattr(env.network_backend, "link_snapshot", lambda *args, **kwargs: snapshot)
     env._refresh_links()
-    assert env.neighbor_cache_seen_step[1, 0] == env.step_count
-    assert env.neighbor_cache_seen_step[0, 1] == -1
+    assert env.last_adjacency[1, 0] == 1
+    assert np.all(env.neighbor_cache_seen_step == -1)
 
 
 def test_gcs_hops_do_not_use_reverse_only_peer_edge():

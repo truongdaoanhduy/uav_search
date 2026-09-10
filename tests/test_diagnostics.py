@@ -5,8 +5,8 @@ from uav_search.envs.paper_env import PaperUAVEnv
 from uav_search.runner.diagnostics import diagnose_episode
 
 
-def test_current_reproduction_scope_defaults_to_fig7_small_scale_scenarios():
-    assert ACTIVE_SCENARIOS == ("f1_m5", "f1_m9")
+def test_current_research_scope_defaults_to_u6_and_u9():
+    assert ACTIVE_SCENARIOS == ("u6", "u9")
 
 
 def test_environment_exposes_aggregate_reward_and_swarm_diagnostics_only():

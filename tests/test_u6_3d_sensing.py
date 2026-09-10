@@ -149,16 +149,17 @@ def test_u6_info_exposes_scalar_altitude_and_belief_sensing_diagnostics():
     assert info1["information_gain_total"] >= info1["information_gain_step"] >= 0.0
 
 
-def test_minimum_uncertainty_fusion_shares_most_certain_cell_posterior():
+def test_minimum_uncertainty_fusion_updates_only_successful_sync_receiver():
     env = make_env(seed=90)
     env.reset(seed=90)
     y, x = 10, 10
     env.belief_maps[:, y, x] = [0.60, 0.90, 0.70, 0.55, 0.65, 0.80]
+    sender_map = env.belief_maps[1].copy()
 
-    env._fuse_peer_beliefs()
+    env._fuse_received_peer_belief(receiver=0, sender_belief=sender_map)
 
-    np.testing.assert_allclose(env.belief_maps[:, y, x], 0.90)
-    assert env.belief_source_map[y, x] == 1
+    assert env.belief_maps[0, y, x] == pytest.approx(0.90)
+    np.testing.assert_allclose(env.belief_maps[1:, y, x], [0.90, 0.70, 0.55, 0.65, 0.80])
 
 
 def test_empty_high_posterior_cell_is_recorded_as_false_confirmation():
@@ -208,7 +209,8 @@ def test_inactive_uav_belief_cannot_drive_fusion_or_target_confirmation():
 
     assert not env.target_found[0]
     assert env.belief_source_map[y, x] != 0
-    np.testing.assert_allclose(env.belief_maps[:, y, x], 0.5)
+    assert env.belief_maps[0, y, x] == pytest.approx(env.peer_target_confirmation_threshold + 1e-4)
+    np.testing.assert_allclose(env.belief_maps[1:, y, x], 0.5)
 
 
 def test_no_target_or_cell_confirmation_occurs_when_all_uavs_are_inactive():

@@ -19,12 +19,13 @@ PAPER_SCENARIOS = (
     "f8_m24",
 )
 PAPER_ALGORITHMS = ("masac", "matd3", "maddpg")
-RESEARCH_SCENARIOS = ("u6",)
+RESEARCH_SCENARIOS = ("u6", "u9")
 ALL_SCENARIOS = PAPER_SCENARIOS + RESEARCH_SCENARIOS
 
-# Current reproduction phase: Fig. 7 small-scale experiments only.
-# The remaining paper scenarios stay configured for later phases.
-ACTIVE_SCENARIOS = ("f1_m5", "f1_m9")
+# Active research scope: homogeneous peer swarms with 6 or 9 UAVs only.
+# Historical paper scenarios remain loadable for reproducibility, but are not
+# part of the default research sweep.
+ACTIVE_SCENARIOS = RESEARCH_SCENARIOS
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

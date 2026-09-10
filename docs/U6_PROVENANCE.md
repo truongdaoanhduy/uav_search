@@ -74,7 +74,7 @@ These choices have related literature, but **no source was found that specifies 
 | Same 2 km radius for UAV-UAV and UAV-GCS candidate links | yes | A simple project baseline; current hardened model requires a fresh topology recalibration. |
 | Static victim targets | yes | Retains the post-disaster root-task interpretation; Liu's 3D sensing paper uses moving targets. |
 | Overall sensing-task reward scale | existing `search_reward_coeff=20` | Liu supports the 1.0:0.1 relative weights, not this global scale. |
-| Belief fusion and cell confirmation | minimum-entropy posterior per cell is shared across the peer maps; threshold-crossing cells are declared before ground truth is consulted | The accessible Liu description supports belief-map search and the `0.99` threshold, but the exact inter-UAV fusion/communication rule is not sufficiently explicit; this fusion is therefore a deterministic research adaptation. |
+| Belief fusion and cell confirmation | each UAV keeps a local posterior; threshold crossing is local. Minimum-entropy fusion occurs only at the receiver after a successfully delivered peer synchronization bundle; topology alone does not share belief. | The accessible Liu description supports belief-map search and the `0.99` threshold. The exact serialization/fusion transport is not sufficiently explicit, so the 4 KiB sync bundle and receiver-only fusion are deterministic research adaptations. |
 
 ## Parameters still not sourced closely enough
 

@@ -8,7 +8,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from uav_search.config import ACTIVE_SCENARIOS, PAPER_ALGORITHMS, PAPER_SCENARIOS
+from uav_search.config import ACTIVE_SCENARIOS, PAPER_ALGORITHMS, RESEARCH_SCENARIOS
 from uav_search.runner.evaluate import evaluate_checkpoint
 from uav_search.runner.train import train_experiment
 from uav_search.runner.visualize import plot_paper_comparison
@@ -18,14 +18,14 @@ from uav_search.runner.wandb_logger import WandbLogger
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Train MADDPG, MATD3 and MASAC for the current Fig. 7 reproduction scope "
-            "(f1_m5/f1_m9), then evaluate and build the paper comparison figures."
+            "Train MADDPG, MATD3 and MASAC for the active homogeneous research scope "
+            "(u6/u9), then evaluate and build comparison figures."
         )
     )
     p.add_argument("--algorithms", nargs="+", choices=PAPER_ALGORITHMS, default=list(PAPER_ALGORITHMS))
     p.add_argument(
-        "--scenarios", nargs="+", choices=PAPER_SCENARIOS, default=list(ACTIVE_SCENARIOS),
-        help="Current default scope is f1_m5/f1_m9; larger paper scenarios remain available for later phases.",
+        "--scenarios", nargs="+", choices=RESEARCH_SCENARIOS, default=list(ACTIVE_SCENARIOS),
+        help="Active research scope is u6/u9 only; historical paper scenarios stay loadable through train.py.",
     )
     p.add_argument("--episodes", type=int, default=10, help="Development default; pass 50000 for the paper protocol")
     p.add_argument("--steps", type=int, default=None)

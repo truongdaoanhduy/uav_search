@@ -66,6 +66,7 @@ class PaperUAVEnv:
             self.peer_delivery_reward = float(self.scenario.get("delivery_reward", 20.0))
             self.peer_report_ttl_s = float(self.scenario.get("report_ttl_s", self.scenario.get("report_ttl_steps", 300) * self.dt))
             self.peer_neighbor_cache_ttl_steps = int(self.scenario.get("neighbor_cache_ttl_steps", 50))
+            self.peer_sync_bytes = int(self.scenario.get("peer_sync_bytes", 4096))
             self.peer_tx_power_min_w = float(self.scenario.get("tx_power_min_w", 0.1))
             self.peer_tx_power_max_w = float(self.scenario.get("tx_power_max_w", 0.4))
             self.peer_tx_power_reference_w = float(self.scenario.get("tx_power_reference_w", 0.1))
@@ -112,6 +113,8 @@ class PaperUAVEnv:
                 raise ValueError("report_bytes and buffer_bytes must be positive")
             if self.peer_report_ttl_s <= 0 or self.peer_neighbor_cache_ttl_steps <= 0:
                 raise ValueError("report_ttl_s and neighbor_cache_ttl_steps must be positive")
+            if self.peer_sync_bytes <= 0:
+                raise ValueError("peer_sync_bytes must be positive")
             if not (0.0 < self.peer_tx_power_min_w <= self.peer_tx_power_max_w):
                 raise ValueError("tx_power_min_w must be positive and <= tx_power_max_w")
             self.network_backend = create_network_backend(
@@ -345,6 +348,9 @@ class PaperUAVEnv:
             self.last_energy_by_agent_j = np.zeros(self.n_agents, dtype=np.float64)
             self.last_bytes_transmitted = 0
             self.total_bytes_transmitted = 0
+            self.last_report_bytes_transmitted_by_agent = np.zeros(self.n_agents, dtype=np.int64)
+            self.last_peer_syncs = 0
+            self.total_peer_syncs = 0
             self.reports_delivered = 0
             self.expired_reports = 0
             self.last_network_result = NetworkStepResult()
@@ -466,17 +472,6 @@ class PaperUAVEnv:
             for i in range(self.n_agents):
                 best_peer = float(np.max(self.last_pair_rates_bps[:, i])) if self.n_agents > 1 else 0.0
                 self.last_rates_bps[i] = max(best_peer, float(self.last_gcs_rates_bps[i]))
-            if hasattr(self, "neighbor_cache_seen_step"):
-                for i in range(self.n_agents):
-                    for j in range(self.n_agents):
-                        if i == j:
-                            continue
-                        # adjacency[receiver, transmitter] is directional. Agent i can
-                        # refresh its cache of j only when j -> i is currently usable.
-                        if self.last_adjacency[i, j]:
-                            self.neighbor_cache_positions[i, j] = self.positions[j]
-                            self.neighbor_cache_battery[i, j] = self.battery_pct[j]
-                            self.neighbor_cache_seen_step[i, j] = self.step_count
             return
 
         candidate = self._candidate_links()
@@ -619,56 +614,78 @@ class PaperUAVEnv:
                     patch.append(0.0)
         return patch
 
-    def _fuse_peer_beliefs(self) -> None:
-        """Share the lowest-uncertainty posterior from active UAVs only."""
-        if not self.peer_mode:
-            return
-        active_indices = np.flatnonzero(self.uav_active)
-        if active_indices.size == 0:
-            self.belief_source_map.fill(-1)
-            return
-        beliefs = np.clip(self.belief_maps[active_indices], 0.0, 1.0)
+    @staticmethod
+    def _belief_entropy_array(beliefs: np.ndarray) -> np.ndarray:
+        """Vectorized binary entropy used for minimum-uncertainty fusion."""
+        beliefs = np.clip(np.asarray(beliefs, dtype=np.float64), 0.0, 1.0)
         entropy = np.zeros_like(beliefs, dtype=np.float64)
         interior = (beliefs > 0.0) & (beliefs < 1.0)
         p = beliefs[interior]
         entropy[interior] = -(p * np.log2(p) + (1.0 - p) * np.log2(1.0 - p))
-        source_local = np.argmin(entropy, axis=0).astype(np.int64)
-        source = active_indices[source_local]
-        fused = np.take_along_axis(beliefs, source_local[None, :, :], axis=0)[0]
-        self.belief_source_map[...] = source
-        self.belief_maps[...] = fused[None, :, :]
+        return entropy
+
+    def _fuse_received_peer_belief(self, receiver: int, sender_belief: np.ndarray) -> None:
+        """Fuse one successfully received peer map into one receiver only.
+
+        This is deliberately communication-gated: merely having a geometric/PHY
+        candidate link never modifies actor knowledge. Ties keep the receiver's
+        existing value so a repeated sync is idempotent.
+        """
+        if not self.peer_mode:
+            return
+        receiver = int(receiver)
+        local = np.clip(self.belief_maps[receiver], 0.0, 1.0)
+        remote = np.clip(np.asarray(sender_belief, dtype=np.float64), 0.0, 1.0)
+        if remote.shape != local.shape:
+            raise ValueError("received peer belief shape does not match local belief map")
+        local_entropy = self._belief_entropy_array(local)
+        remote_entropy = self._belief_entropy_array(remote)
+        take_remote = remote_entropy + 1e-12 < local_entropy
+        self.belief_maps[receiver, take_remote] = remote[take_remote]
 
     def _confirm_peer_targets(self) -> None:
-        """Confirm threshold-crossing cells first, then evaluate them against target truth."""
+        """Confirm cells from active UAV-local beliefs without global fusion.
+
+        Environment truth is global bookkeeping, but each actor's belief remains
+        local until a successful peer transmission explicitly synchronizes it.
+        """
         if not self.peer_mode:
             return
         self.last_false_confirmations = 0
-        if not np.any(self.uav_active):
+        active = np.flatnonzero(self.uav_active)
+        if active.size == 0:
             self.belief_source_map.fill(-1)
             return
-        self._fuse_peer_beliefs()
+
         threshold = self.peer_target_confirmation_threshold
-        fused = self.belief_maps[0]
-        candidate_cells = np.argwhere((fused >= threshold) & ~self.confirmed_cells)
+        active_beliefs = self.belief_maps[active]
+        candidate_cells = np.argwhere(
+            np.any(active_beliefs >= threshold, axis=0) & ~self.confirmed_cells
+        )
         targets_by_cell: dict[tuple[int, int], list[int]] = {}
         for target_idx in range(self.n_targets):
             targets_by_cell.setdefault(self._target_grid_cell(target_idx), []).append(target_idx)
 
         for y_raw, x_raw in candidate_cells:
             y, x = int(y_raw), int(x_raw)
-            self.confirmed_cells[y, x] = True
-            detector = int(self.belief_source_map[y, x])
-            if detector < 0 or detector >= self.n_agents or not self.uav_active[detector]:
-                active = np.flatnonzero(self.uav_active)
-                if active.size == 0:
-                    continue
+            eligible = active[self.belief_maps[active, y, x] >= threshold]
+            if eligible.size == 0:
+                continue
+            posteriors = self.belief_maps[eligible, y, x]
+            best_p = float(np.max(posteriors))
+            best = eligible[np.isclose(posteriors, best_p, rtol=0.0, atol=1e-12)]
+            if best.size > 1:
                 cell_xy = np.array(
                     [(x + 0.5) * self.peer_sensing_grid_cell_m, (y + 0.5) * self.peer_sensing_grid_cell_m],
                     dtype=np.float64,
                 )
-                distances = np.linalg.norm(self.positions[active, :2] - cell_xy, axis=1)
-                detector = int(active[int(np.argmin(distances))])
+                distances = np.linalg.norm(self.positions[best, :2] - cell_xy, axis=1)
+                min_distance = float(np.min(distances))
+                best = best[np.isclose(distances, min_distance, rtol=0.0, atol=1e-9)]
+            detector = int(np.min(best))
 
+            self.confirmed_cells[y, x] = True
+            self.belief_source_map[y, x] = detector
             true_targets = [idx for idx in targets_by_cell.get((y, x), []) if not self.target_found[idx]]
             if not true_targets:
                 self.false_confirmed_cells[y, x] = True
@@ -722,9 +739,11 @@ class PaperUAVEnv:
                     if seen >= 0:
                         cached_pos = self.neighbor_cache_positions[i, j]
                         d_ij = float(np.linalg.norm(cached_pos - self.positions[i])) / area
-                        live_contact = bool(self.last_adjacency[i, j])
                         age = max(0, int(self.step_count) - seen)
-                        freshness = 1.0 if live_contact else max(
+                        # Freshness reflects the age of the last successfully
+                        # received synchronization bundle only. Current topology
+                        # alone must not upgrade stale peer knowledge to "live".
+                        freshness = max(
                             0.0, 1.0 - age / float(self.peer_neighbor_cache_ttl_steps)
                         )
                         other.extend([
@@ -866,11 +885,13 @@ class PaperUAVEnv:
         self._confirm_peer_targets()
 
     def _peer_transmit(self, act: np.ndarray) -> None:
-        """Execute one-hop report transfers through the configured network backend.
+        """Execute communication-gated peer sync and one-hop report transfers.
 
-        The MARL action remains authoritative for tx gating, byte budget and the
-        immediate recipient.  A frozen application-buffer snapshot prevents bytes
-        received in this macro-step from being forwarded again until the next step.
+        A peer-directed TX always carries a small synchronization bundle containing
+        sender state plus its belief/known-target snapshot. Report bytes, when any,
+        follow that bundle. Both knowledge refresh and report movement occur only
+        after the configured network backend reports successful delivery. A frozen
+        start-of-slot snapshot prevents same-step multi-hop information teleportation.
         """
         self.last_selected_tx_rate_bps.fill(0.0)
         self.last_selected_tx_distance_m.fill(np.inf)
@@ -878,46 +899,58 @@ class PaperUAVEnv:
         self.last_tx_active.fill(False)
         self.last_tx_success.fill(False)
         self.last_delivery_reward_by_agent.fill(0.0)
+        self.last_report_bytes_transmitted_by_agent.fill(0)
         self.last_bytes_transmitted = 0
+        self.last_peer_syncs = 0
 
         slot_start = self.report_buffers.copy()
+        belief_slot_start = self.belief_maps.copy()
+        known_slot_start = self.target_known_by_agent.copy()
+        position_slot_start = self.positions.copy()
+        battery_slot_start = self.battery_pct.copy()
         intents: list[TransmissionIntent] = []
         nominal_rate_bps = float(self.scenario.get("uavnetsim_bit_rate_bps", self.assumed["comm_rate_max_bps"]))
+        nominal_slot_bytes = max(0, int(nominal_rate_bps * self.dt / 8.0))
+
         for sender in range(self.n_agents):
-            if not self.uav_active[sender]:
+            if not self.uav_active[sender] or act[sender, 3] <= 0.0:
                 continue
             queued_at_start = int(slot_start[:, sender].sum())
-            if act[sender, 3] <= 0.0 or queued_at_start <= 0:
-                continue
-            self.last_tx_active[sender] = True
             recipient = self._decode_peer_recipient(sender, float(act[sender, 5]))
             tx_power_w = self._decode_tx_power_w(float(act[sender, 4]))
-            self.last_selected_tx_power_w[sender] = tx_power_w
+
             if recipient == GCS_RECIPIENT:
+                # GCS already owns its own state; do not send empty control traffic.
+                if queued_at_start <= 0:
+                    continue
+                requested = min(nominal_slot_bytes, queued_at_start)
+                if requested <= 0:
+                    continue
                 rate = float(self.last_gcs_rates_bps[sender])
                 distance_m = float(np.linalg.norm(self.positions[sender] - self.gcs_position))
-                receiver_room = queued_at_start
             else:
+                if recipient < 0 or recipient >= self.n_agents or not self.uav_active[recipient]:
+                    continue
                 rate = float(self.last_pair_rates_bps[recipient, sender])
                 distance_m = float(np.linalg.norm(self.positions[sender] - self.positions[recipient]))
-                receiver_room = max(0, self.peer_buffer_bytes - int(self.queue_bytes[recipient])) if self.uav_active[recipient] else 0
+                receiver_room = max(0, self.peer_buffer_bytes - int(self.queue_bytes[recipient]))
+                report_budget = min(
+                    max(0, nominal_slot_bytes - self.peer_sync_bytes),
+                    queued_at_start,
+                    receiver_room,
+                )
+                requested = self.peer_sync_bytes + report_budget
+
+            self.last_tx_active[sender] = True
+            self.last_selected_tx_power_w[sender] = tx_power_w
             self.last_selected_tx_rate_bps[sender] = rate
             self.last_selected_tx_distance_m[sender] = distance_m
-            # The application offers as much queued data as can fit in one
-            # nominal MAC slot. ``network_packet_payload_bytes`` is a packetization
-            # size owned by the backend, not a hidden one-packet-per-RL-step cap.
-            budget = min(
-                int(nominal_rate_bps * self.dt / 8.0),
-                queued_at_start,
-                receiver_room,
-            )
-            if budget > 0:
-                intents.append(TransmissionIntent(
-                    sender=sender,
-                    recipient=recipient,
-                    requested_bytes=budget,
-                    tx_power_w=tx_power_w,
-                ))
+            intents.append(TransmissionIntent(
+                sender=sender,
+                recipient=recipient,
+                requested_bytes=requested,
+                tx_power_w=tx_power_w,
+            ))
 
         self.last_network_result = self.network_backend.transmit(
             intents,
@@ -937,7 +970,22 @@ class PaperUAVEnv:
             self.last_selected_tx_rate_bps[sender] = float(outcome.rate_bps)
             self.last_selected_tx_distance_m[sender] = float(outcome.distance_m)
             self.last_tx_success[sender] = bool(outcome.success)
-            remaining = max(0, int(outcome.delivered_bytes))
+            delivered = max(0, int(outcome.delivered_bytes))
+
+            if recipient == GCS_RECIPIENT:
+                remaining = delivered
+            else:
+                # The synchronization bundle is conceptually first in the frame.
+                # Partial bundle delivery is not enough to refresh actor knowledge.
+                if delivered >= self.peer_sync_bytes and 0 <= recipient < self.n_agents and self.uav_active[recipient]:
+                    self.neighbor_cache_positions[recipient, sender] = position_slot_start[sender]
+                    self.neighbor_cache_battery[recipient, sender] = battery_slot_start[sender]
+                    self.neighbor_cache_seen_step[recipient, sender] = self.step_count
+                    self._fuse_received_peer_belief(recipient, belief_slot_start[sender])
+                    self.target_known_by_agent[recipient] |= known_slot_start[sender]
+                    self.last_peer_syncs += 1
+                remaining = max(0, delivered - self.peer_sync_bytes)
+
             for target_idx in range(self.n_targets):
                 if remaining <= 0:
                     break
@@ -969,7 +1017,9 @@ class PaperUAVEnv:
                     self.target_known_by_agent[recipient, target_idx] = True
                 remaining -= nbytes
                 self.last_bytes_transmitted += nbytes
+                self.last_report_bytes_transmitted_by_agent[sender] += nbytes
 
+        self.total_peer_syncs += int(self.last_peer_syncs)
         self.total_bytes_transmitted += int(self.last_bytes_transmitted)
         self.reports_delivered = int(self.report_delivered.sum())
 
@@ -1034,6 +1084,11 @@ class PaperUAVEnv:
         rc = float(self.assumed["comm_reward_max"])
         if self.peer_mode:
             if not self.last_tx_active[idx]:
+                return 0.0
+            # Peer synchronization is useful only indirectly through better search;
+            # do not create an immediate positive reward that can be farmed by
+            # transmitting empty control bundles every step.
+            if self.last_report_bytes_transmitted_by_agent[idx] <= 0:
                 return 0.0
             rate = float(self.last_selected_tx_rate_bps[idx])
             if rate < float(self.paper["min_comm_rate_bps"]):
@@ -1389,6 +1444,8 @@ class PaperUAVEnv:
             "simulation_backend": "root_paper_mpe_style",
             "bytes_transmitted": int(self.last_bytes_transmitted) if self.peer_mode else 0,
             "total_bytes_transmitted": int(self.total_bytes_transmitted) if self.peer_mode else 0,
+            "peer_syncs_step": int(self.last_peer_syncs) if self.peer_mode else 0,
+            "peer_syncs_total": int(self.total_peer_syncs) if self.peer_mode else 0,
             "reports_delivered": int(self.reports_delivered) if self.peer_mode else 0,
             "mission_delivery_rate": (
                 float(self.reports_delivered / self.n_targets) if self.peer_mode and self.n_targets else 0.0

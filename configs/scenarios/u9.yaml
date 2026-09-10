@@ -1,10 +1,10 @@
 scenario:
-  name: u6
+  name: u9
   architecture: homogeneous_peer
-  # Research adaptation: six identical multi-rotor UAVs, no leader/follower.
+  # Research adaptation: nine identical multi-rotor UAVs, no leader/follower.
   fixed_wing: 0
-  multirotor: 6
-  num_uavs: 6
+  multirotor: 9
+  num_uavs: 9
   # Full-3D research adaptation. MRMG publishes a 50--150 m UAV altitude
   # interval; Liu et al. publish low/mid/high sensing layers but not their
   # physical metre values. The 100 m midpoint and mapping are project design.
@@ -84,7 +84,7 @@ scenario:
   obstacles: 6
   # The root paper explicitly models post-disaster buildings as 2-D circles, but does
   # not publish six as the main simulation count. Six circles and their radii remain
-  # a scenario-density assumption; u6 extrudes them vertically as no-fly columns.
+  # a scenario-density assumption; homogeneous research scenarios extrude them vertically as no-fly columns.
   obstacles_provenance: RESEARCH_ASSUMPTION
   obstacle_shape_provenance: "RESEARCH_ADAPTATION:AO_ROOT_CIRCULAR_BUILDINGS_EXTRUDED_3D"
   # Buffer-aided multi-UAV relaying literature commonly discretizes flight into 1 s slots.
@@ -102,8 +102,8 @@ scenario:
   # launch pads so the initial state is not an artificial collision.
   initialization: gcs_launch_pads
   # Published search frameworks deploy all UAVs from a common base. Separate pads
-  # avoid an artificial t=0 collision; 300 m is geometry chosen to fit six pads.
-  launch_radius_m: 300.0
+  # avoid an artificial t=0 collision; 450 m is geometry chosen to fit nine pads.
+  launch_radius_m: 450.0
   launch_radius_provenance: RESEARCH_DESIGN_DERIVED_SAFE_PAD_GEOMETRY
   safety_distance_m: 141.4
   safety_distance_provenance: "LITERATURE_BACKED_BASELINE:LIU_2024_SAFE_DISTANCE_141_4M"
@@ -134,7 +134,7 @@ scenario:
   # With dt=1 s, five RL steps use the same freshness horizon.
   neighbor_cache_ttl_steps: 5
   neighbor_cache_provenance: "RESEARCH_ADAPTATION:UAVNETSIM_NATIVE_5S_NEIGHBOR_LIFETIME"
-  # Long u6 horizons must not reuse the root paper's positive residual-battery
+  # Long homogeneous-swarm horizons must not reuse the root paper's positive residual-battery
   # reward every step; use a small explicit per-Joule cost instead.
   energy_cost_per_j: 0.001
   energy_cost_provenance: RESEARCH_DESIGN_CALIBRATION_REQUIRED

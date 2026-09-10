@@ -171,10 +171,15 @@ def plot_paper_comparison(
     output_dir: str | Path,
     evaluation_dir_name: str = "evaluation_5000",
 ) -> list[Path]:
-    """Recreate the software-result plots relevant to current Fig. 7 scope."""
+    """Create comparison plots for the active homogeneous research scenarios."""
     out = Path(output_dir); out.mkdir(parents=True, exist_ok=True)
     algorithms = [a for a in ("masac", "matd3", "maddpg") if any(k[0] == a for k in run_dirs)]
-    scenarios = [s for s in ("f1_m5", "f1_m9") if any(k[1] == s for k in run_dirs)]
+    # Active workflows use U6/U9, while historical paper runs remain renderable
+    # for regression/reproducibility. Keep a deterministic known-scenario order.
+    scenario_order = ("u6", "u9", "f1_m5", "f1_m9")
+    scenarios = [s for s in scenario_order if any(k[1] == s for k in run_dirs)]
+    if not scenarios:
+        raise ValueError("run_dirs does not contain a supported comparison scenario")
 
     fig, axes = plt.subplots(1, len(scenarios), figsize=(6.5 * len(scenarios), 4.2), squeeze=False)
     for ax, scenario in zip(axes[0], scenarios):
@@ -187,7 +192,7 @@ def plot_paper_comparison(
             window = min(500, max(1, len(df) // 50))
             values = df[y].rolling(window=window, min_periods=1).mean()
             ax.plot(df["episode"], values, linewidth=1.5, label=algorithm.upper())
-        ax.set_title("(1,5)" if scenario == "f1_m5" else "(1,9)")
+        ax.set_title(scenario.upper())
         ax.set_xlabel("Episode"); ax.set_ylabel("Reward Value"); ax.grid(alpha=0.25); ax.legend(fontsize=8)
     fig.tight_layout()
     fig7 = out / "fig07_training_reward.png"; fig.savefig(fig7, dpi=180); plt.close(fig)
@@ -202,8 +207,9 @@ def plot_paper_comparison(
             values = [float(summaries[(algorithm, scenario)].get(metric, 0.0)) for scenario in scenarios]
             offset = (j - (len(algorithms) - 1) / 2) * width
             ax.bar(x + offset, values, width=width, label=algorithm.upper())
-        ax.set_xticks(x, ["(1,5)", "(1,9)"][: len(scenarios)])
-        ax.set_xlabel("(Number of Fixed-Wing UAVs, Number of Multi-Rotor UAVs)")
+        labels = {"u6": "U6", "u9": "U9", "f1_m5": "(1,5)", "f1_m9": "(1,9)"}
+        ax.set_xticks(x, [labels[s] for s in scenarios])
+        ax.set_xlabel("Scenario")
         ax.set_ylabel(ylabel); ax.grid(axis="y", alpha=0.25); ax.legend(fontsize=8)
         fig.tight_layout(); path = out / filename; fig.savefig(path, dpi=180); plt.close(fig); return path
 

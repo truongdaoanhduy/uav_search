@@ -29,7 +29,7 @@ uav_search/
 
 **`models.py`** — pure physical/model functions: A2A communication rate, multi-rotor power, circle collision. Kept separate so radio/energy models can later be replaced independently.
 
-**`paper_env.py`** — stateful root-paper mission simulator. Paper-reproduction scenarios retain their existing planar control contract. In `u6` mode it switches to six identical peers, full 3D velocity/altitude motion, common-base launch pads, rejection-sampled valid obstacles, local/stale Dec-POMDP peer observations, Bayesian local sensing followed by minimum-entropy peer belief fusion and cell-first true/false confirmation, hard inter-UAV safety filtering, finite report buffers/TTL, one-hop-per-step forwarding, battery depletion, and direct/multi-hop/disconnected GCS diagnostics while delegating transport outcomes to `network_backends.py`.
+**`paper_env.py`** — stateful root-paper mission simulator. Paper-reproduction scenarios retain their existing planar control contract. In `u6`/`u9` mode it switches to homogeneous peers, full 3D velocity/altitude motion, common-base launch pads, rejection-sampled valid obstacles, communication-gated local/stale Dec-POMDP peer observations, Bayesian local sensing with receiver-only minimum-uncertainty belief fusion after successful peer synchronization and cell-first true/false confirmation, hard inter-UAV safety filtering, finite report buffers/TTL, one-hop-per-step forwarding, battery depletion, and direct/multi-hop/disconnected GCS diagnostics while delegating transport outcomes to `network_backends.py`.
 
 **`sensing.py`** — pure altitude-aware sensing primitives: low/mid/high profile selection, fixed 1/5/9-cell FOV footprints, Bayesian occupancy update and binary entropy. Keeping these functions pure makes sensing tests deterministic and separates paper-derived sensor parameters from environment control logic.
 
@@ -88,7 +88,8 @@ uav_search/
 - `test_homogeneous_paper_env.py` — homogeneous `u6` topology/action/report-routing behavior and seed determinism.
 - `test_homogeneous_algorithms.py` — verifies MASAC/MATD3/MADDPG accept the `u6` six-dimensional action and MATD3 smooths only continuous coordinates.
 - `test_u6_3d_motion.py` — full-3D action, altitude initialization/bounds and legacy 2-D compatibility.
-- `test_u6_3d_sensing.py` — altitude profiles, Bayesian local sensing, minimum-entropy peer fusion, cell-first true/false confirmation, no hidden-target leakage and sensing diagnostics.
+- `test_u6_3d_sensing.py` — altitude profiles, Bayesian local sensing, receiver-only minimum-uncertainty fusion, cell-first true/false confirmation, no hidden-target leakage and sensing diagnostics.
+- `test_research_scenario_comm_gating.py` — active U6/U9 scope, successful/failed peer synchronization, no topology-only cache refresh, no global belief teleportation, and one-hop-per-macro-step knowledge propagation.
 - `test_sensing.py` — pure FOV/Bayes/entropy primitives.
 - `test_train_metrics.py` — runner extraction of altitude/belief/sensing episode metrics.
 - `test_network_backends.py` — analytical-regression tests plus real-UavNetSim A2A peer, A2G GCS, power-aware topology and CSMA/ACK transport tests.
