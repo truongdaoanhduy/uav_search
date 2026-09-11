@@ -1148,6 +1148,14 @@ class PaperUAVEnv:
                 own_z = self.positions[i, 2] / area
                 velocity_scale = legacy_vmax
 
+            previous_recipient = (
+                self._encode_peer_recipient(
+                    i,
+                    int(self.last_selected_recipient[i]),
+                )
+                if self.peer_mode and self.last_tx_active[i]
+                else 0.0
+            )
             own = [
                 self.positions[i, 0] / area,
                 self.positions[i, 1] / area,
@@ -1157,7 +1165,11 @@ class PaperUAVEnv:
                 self.velocities[i, 2] / velocity_scale if self.peer_mode else 0.0,
                 self.battery_pct[i] / 100.0 if is_rotor else 0.0,
                 self._actor_network_state(i) if is_rotor else 0.0,
-                self.headings[i] / math.pi if is_fixed else 0.0,
+                (
+                    self.headings[i] / math.pi
+                    if is_fixed
+                    else previous_recipient
+                ),
             ]
 
             other: list[float] = []
@@ -1267,13 +1279,31 @@ class PaperUAVEnv:
         d = self._observations()
         return np.stack([d[a] for a in self.agents], axis=0)
 
+    def _peer_recipient_candidates(self, sender: int) -> list[int]:
+        """Return the ordered peer/GCS action bins available to one sender."""
+        if not self.peer_mode:
+            raise RuntimeError(
+                "recipient encoding is only defined for homogeneous_peer scenarios"
+            )
+        sender = int(sender)
+        if sender < 0 or sender >= self.n_agents:
+            raise ValueError("sender index is outside the agent set")
+        return [j for j in range(self.n_agents) if j != sender] + [GCS_RECIPIENT]
+
     def _decode_peer_recipient(self, sender: int, code: float) -> int:
         """Map one continuous policy output to a stable peer/GCS destination set."""
-        if not self.peer_mode:
-            raise RuntimeError("recipient decoding is only defined for homogeneous_peer scenarios")
-        candidates = [j for j in range(self.n_agents) if j != sender] + [GCS_RECIPIENT]
+        candidates = self._peer_recipient_candidates(sender)
         x = float(np.clip((float(code) + 1.0) * 0.5, 0.0, 1.0 - 1e-12))
         return int(candidates[min(int(x * len(candidates)), len(candidates) - 1)])
+
+    def _encode_peer_recipient(self, sender: int, recipient: int) -> float:
+        """Return the action-bin center for a decoded peer/GCS recipient."""
+        candidates = self._peer_recipient_candidates(sender)
+        try:
+            bin_index = candidates.index(int(recipient))
+        except ValueError as exc:
+            raise ValueError("recipient is not available to this sender") from exc
+        return float(2.0 * ((bin_index + 0.5) / len(candidates)) - 1.0)
 
     def _decode_tx_power_w(self, code: float) -> float:
         """Map the continuous power action to the configured RF power interval."""

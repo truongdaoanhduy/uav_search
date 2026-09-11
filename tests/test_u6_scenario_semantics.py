@@ -57,6 +57,39 @@ def test_target_outside_physical_footprint_is_not_treated_as_occupied() -> None:
     assert not env.last_sensor_positive[0, 0]
 
 
+def test_previous_peer_recipient_uses_the_original_action_bin_center() -> None:
+    env = make_env(seed=91)
+    sender = 0
+    env.last_tx_active[sender] = True
+
+    env.last_selected_recipient[sender] = 1
+    first = float(env._observations()["uav_0"][8])
+    env.last_selected_recipient[sender] = 2
+    second = float(env._observations()["uav_0"][8])
+
+    assert first == pytest.approx(recipient_code(env, sender, 1))
+    assert second == pytest.approx(recipient_code(env, sender, 2))
+    assert first != second
+
+    env.last_tx_active[sender] = False
+    assert env._observations()["uav_0"][8] == 0.0
+
+
+@pytest.mark.parametrize(("scenario", "expected_dim"), [("u6", 158), ("u9", 197)])
+def test_previous_recipient_feedback_preserves_observation_shape(
+    scenario: str,
+    expected_dim: int,
+) -> None:
+    cfg = deepcopy(load_config("masac", scenario))
+    cfg["scenario"]["network_backend"] = "analytical"
+    env = PaperUAVEnv(cfg, seed=92)
+
+    observations = env._observations()
+
+    assert env.obs_dim == expected_dim
+    assert all(value.shape == (expected_dim,) for value in observations.values())
+
+
 def test_peer_observation_is_invariant_to_unconfirmed_ground_truth_target_position() -> None:
     env = make_env()
     env.last_sensor_positive[0, 0] = True

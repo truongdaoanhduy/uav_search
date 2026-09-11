@@ -310,7 +310,7 @@ git add src/uav_search/runner/termination.py src/uav_search/runner/train.py src/
 git commit -m "fix: handle mixed multi-agent episode endings"
 ```
 
-## Task 5: Surface previous peer recipient without changing observation shape
+## Task 5: Surface previous peer recipient without changing observation shape ✅
 
 **Files:**
 
