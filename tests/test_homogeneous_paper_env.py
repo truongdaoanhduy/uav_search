@@ -22,6 +22,8 @@ def force_belief_confirmation(env, target_idx=0, agent_idx=0):
     y, x = env._target_grid_cell(target_idx)
     env.belief_maps[:, y, x] = 0.1
     env.belief_maps[agent_idx, y, x] = env.peer_target_confirmation_threshold
+    env.fine_positive_cells_by_agent[agent_idx, y, x] = True
+    env.fine_target_evidence_by_agent[agent_idx, target_idx] = True
     env._confirm_peer_targets()
     env._retry_pending_reports()
 

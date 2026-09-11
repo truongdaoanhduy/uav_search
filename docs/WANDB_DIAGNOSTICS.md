@@ -16,14 +16,14 @@ Detailed raw optimizer updates remain available locally in `metrics/updates.csv`
 ### Swarm state
 - `swarm/avg_battery_pct`
 - `swarm/depleted_uavs`
-- `swarm/collided_uavs`
+- `swarm/safety_distance_violation_uavs`
 - `swarm/obstacle_hit_uavs`
 - `swarm/boundary_hit_uavs`
 - `swarm/broken_link_uavs`
 - `swarm/avg_comm_rate_mbps`
 - `swarm/avg_broken_link_s`
 
-Counts such as `collided_uavs` are the number of distinct UAVs that entered that state at least once during the episode, not the number of repeated collision events.
+Counts such as `safety_distance_violation_uavs` are the number of distinct UAVs that entered that state at least once during the episode, not the number of repeated safety-distance violation events.
 Battery monitoring is intentionally only the swarm average plus the number of depleted UAVs.
 
 ### Fixed-wing vs multi-rotor groups

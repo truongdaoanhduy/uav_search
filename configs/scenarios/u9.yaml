@@ -20,14 +20,14 @@ scenario:
   # Continuous altitude-aware target sensing. Hu et al. (Sensors 2014) give
   # the nadir-camera geometry r_FOV = h*tan(phi), with phi = half the full
   # camera FoV, but do not publish a numeric phi. We calibrate a fixed 90 deg
-  # full FoV so the 100 m belief grid exactly preserves Liu et al.'s published
-  # 1/5/9-cell footprints at the 50/100/150 m reference altitudes. Pd/Pf are
-  # linearly interpolated between Liu's explicit anchors, preserving those
-  # values exactly while eliminating nearest-level snapping between anchors.
+  # full FoV, then evaluate the circular footprint against absolute grid-cell
+  # geometry at the UAV's true XY pose. The number of intersected cells therefore
+  # varies near cell boundaries instead of being forced to 1/5/9. Pd/Pf are
+  # linearly interpolated between Liu's explicit low/mid/high anchors.
   sensing_model: continuous_hu_liu
   sensing_model_provenance: "RESEARCH_ADAPTATION:HU_2014_GEOMETRIC_FOV_PLUS_LIU_2024_SENSOR_ANCHORS"
   camera_full_fov_deg: 90.0
-  camera_full_fov_provenance: "RESEARCH_CALIBRATION:PRESERVE_LIU_1_5_9_ON_100M_GRID"
+  camera_full_fov_provenance: "RESEARCH_CALIBRATION:90_DEGREE_NADIR_FOV"
   sensing_grid_cell_m: 100.0
   sensing_grid_provenance: RESEARCH_ADAPTATION
   sensing_fov_cells: [1, 5, 9]
@@ -39,6 +39,10 @@ scenario:
   belief_prior_provenance: "CORE_PAPER_EXPLICIT:LIU_2024_3D_SEARCH"
   target_confirmation_threshold: 0.99
   target_confirmation_provenance: "CORE_PAPER_EXPLICIT:LIU_2024_3D_SEARCH"
+  # Coarse/high-altitude sensing may identify a suspected cell, but final
+  # identification requires a positive observation at the low/fine layer.
+  fine_confirmation_max_altitude_m: 50.0
+  fine_confirmation_provenance: "RESEARCH_ADAPTATION:LIU_2024_HIGH_LOW_CONFIRMATION"
   sensing_target_reward_weight: 1.0
   sensing_cognitive_reward_weight: 0.1
   sensing_reward_weight_provenance: "CORE_PAPER_EXPLICIT:LIU_2024_3D_SEARCH"
@@ -125,11 +129,14 @@ scenario:
   gcs_position_provenance: "RESEARCH_ADAPTATION:SAR_OLSR_2023_EDGE_BASE_STATION"
   report_bytes: 1000000
   report_bytes_provenance: "LITERATURE_BACKED_BASELINE:DU_2021_UAV_ASSISTED_VDTN_500KB_TO_1MB"
-  # Du et al. explicitly use 100 MB buffers for UAV nodes in UAV-assisted VDTN experiments.
-  buffer_bytes: 100000000
-  buffer_bytes_provenance: "LITERATURE_BACKED_BASELINE:DU_2021_UAV_ASSISTED_VDTN_100MB_UAV_BUFFER"
+  # Workload-coupled finite storage: each UAV can carry three complete
+  # reports, so buffer pressure is reachable with ten one-MB mission reports.
+  buffer_bytes: 3000000
+  buffer_bytes_provenance: "RESEARCH_DESIGN_WORKLOAD_COUPLED:3_COMPLETE_REPORTS"
   delivery_reward: 20.0
   delivery_reward_provenance: RESEARCH_DESIGN_CALIBRATION_REQUIRED
+  expiry_penalty: 20.0
+  expiry_penalty_provenance: "RESEARCH_DESIGN:SYMMETRIC_WITH_DELIVERY_REWARD"
   report_ttl_s: 300.0
   report_ttl_provenance: "LITERATURE_BACKED_BASELINE:DU_2021_UAV_ASSISTED_VDTN_300S_TTL"
   # DJI Mavic 3 Enterprise is a close small-multirotor hardware reference; published

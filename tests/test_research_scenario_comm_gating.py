@@ -41,6 +41,11 @@ def place_single_good_peer_link(env: PaperUAVEnv) -> None:
     env._refresh_links()
 
 
+def quantized_belief(env: PaperUAVEnv, value: float) -> float:
+    q = float(env.peer_sync_quantization_levels - 1)
+    return float(np.rint(np.clip(value, 0.0, 1.0) * q) / q)
+
+
 def test_active_research_scope_is_only_u6_and_u9():
     assert RESEARCH_SCENARIOS == ("u6", "u9")
     assert ACTIVE_SCENARIOS == RESEARCH_SCENARIOS
@@ -107,7 +112,7 @@ def test_successful_peer_sync_refreshes_only_receiver_cache_and_fuses_receiver_b
     assert env.neighbor_cache_seen_step[1, 0] == env.step_count
     np.testing.assert_allclose(env.neighbor_cache_positions[1, 0], env.positions[0])
     assert env.neighbor_cache_battery[1, 0] == pytest.approx(env.battery_pct[0])
-    assert env.belief_maps[1, y, x] == pytest.approx(0.90)
+    assert env.belief_maps[1, y, x] == pytest.approx(quantized_belief(env, 0.90))
     assert env.belief_maps[2, y, x] == pytest.approx(0.50)
 
 
@@ -330,11 +335,12 @@ def test_peer_belief_sync_is_at_most_one_hop_per_macro_step():
 
     assert env.last_tx_success[0]
     assert env.last_tx_success[1]
-    assert env.belief_maps[1, y, x] == pytest.approx(0.90)
+    assert env.belief_maps[1, y, x] == pytest.approx(quantized_belief(env, 0.90))
     # UAV1's slot-start map was still 0.5, so UAV2 cannot receive UAV0's belief
-    # through UAV1 until a later macro-step.
-    assert env.belief_maps[2, y, x] == pytest.approx(0.50)
+    # through UAV1 until a later macro-step. It only receives UAV1's quantized
+    # slot-start 0.5 belief, not UAV0's 0.9 belief.
+    assert env.belief_maps[2, y, x] == pytest.approx(quantized_belief(env, 0.50))
 
     env._peer_transmit(peer_sync_actions(env, sender=1, recipient=2))
     assert env.last_tx_success[1]
-    assert env.belief_maps[2, y, x] == pytest.approx(0.90)
+    assert env.belief_maps[2, y, x] == pytest.approx(quantized_belief(env, 0.90))

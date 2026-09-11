@@ -29,7 +29,7 @@ def diagnose_episode(metrics: dict[str, Any]) -> dict[str, Any]:
         failure_scope = "rotor_group"
 
     safety_uavs = (
-        int(metrics.get("collided_uavs", 0))
+        int(metrics.get("safety_distance_violation_uavs", 0))
         + int(metrics.get("obstacle_hit_uavs", 0))
         + int(metrics.get("boundary_hit_uavs", 0))
     )

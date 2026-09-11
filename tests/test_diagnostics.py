@@ -29,7 +29,7 @@ def test_environment_exposes_aggregate_reward_and_swarm_diagnostics_only():
     expected_pct = 100.0 - float(np.mean(env.battery_pct[env.multirotor_indices]))
     assert np.isclose(info["energy_consumption_pct"], expected_pct)
     assert np.isclose(info["avg_battery_pct"], float(np.mean(env.battery_pct[env.multirotor_indices])))
-    for key in ["collided_uavs", "obstacle_hit_uavs", "boundary_hit_uavs", "broken_link_uavs", "depleted_uavs"]:
+    for key in ["safety_distance_violation_uavs", "obstacle_hit_uavs", "boundary_hit_uavs", "broken_link_uavs", "depleted_uavs"]:
         assert key in info
         assert isinstance(info[key], int)
         assert 0 <= info[key] <= env.n_agents
@@ -41,7 +41,7 @@ def test_diagnose_episode_uses_aggregate_swarm_signals_for_communication_failure
         "phase": "post_convergence_reference",
         "search_rate": 0.1,
         "critic_loss": 2.0,
-        "collided_uavs": 0,
+        "safety_distance_violation_uavs": 0,
         "obstacle_hit_uavs": 0,
         "boundary_hit_uavs": 0,
         "broken_link_uavs": 2,
@@ -66,7 +66,7 @@ def test_diagnose_episode_prioritizes_rl_instability_for_swarm_wide_collapse():
         "phase": "post_convergence_reference",
         "search_rate": 0.0,
         "critic_loss": 1e8,
-        "collided_uavs": 0,
+        "safety_distance_violation_uavs": 0,
         "obstacle_hit_uavs": 0,
         "boundary_hit_uavs": 0,
         "broken_link_uavs": 0,

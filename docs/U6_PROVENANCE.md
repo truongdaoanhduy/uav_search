@@ -26,7 +26,7 @@
 | Safe distance | 141.4 m | Literature-backed baseline | Liu et al. 2024, simulation parameter `d_safe=141.4 m`. |
 | 3D continuous acceleration precedent | x/y/z acceleration | Literature-backed concept | GLIDE, Information 15 (2024) 477 uses continuous acceleration in all three axes and all UAVs starting from a base. The exact six-dimensional `u6` hybrid action is still an adaptation. |
 | Common-base deployment | yes | Literature-backed concept | GLIDE 2024 and homogeneous simultaneous search/routing literature both initialize all UAVs at a single base. Separate launch pads are a project safety adaptation. |
-| Number of ground targets | 10 | Literature-backed baseline | Ao et al. explicitly evaluate several 10-target post-disaster scenarios. Homogeneous six-UAV `u6` is still a new team composition. |
+| Number of ground targets | 10 in both U6 and U9 | Literature-backed baseline + fixed-workload comparison design | Ao et al. explicitly evaluate several 10-target post-disaster scenarios. Holding workload fixed while changing only team size makes U6→U9 a **team-size ablation**, not a load-scaled scalability claim. |
 | Ground station placement | edge of area | Literature-backed concept | Wheeb et al., Electronics 12 (2023) 1334 places the ground base station at the edge of a SAR search area and lets UAVs relay target reports toward it. The exact coordinate `[0,2500,0]` is adapted. |
 | Macro step | 1 s | Literature-backed baseline | Buffer-aided multi-UAV relay literature uses 1 s trajectory slots; `u6` makes this scenario-specific so root-paper scenarios are unchanged. |
 | Development horizon | 600 s = 600 x 1 s | Literature-backed baseline + calibration required | Wheeb et al. 2023 uses 600 s in a UAV SAR FANET study. Map/team differences mean sensitivity analysis is still required. |
@@ -38,10 +38,12 @@
 | Packet payload | 1024 B | UavNetSim native + literature support | Pinned UavNetSim uses `AVERAGE_PAYLOAD_LENGTH=8192` bits. FANET simulation literature also explicitly uses 1024-byte packets. |
 | Target report size | 1 MB | Literature-backed baseline | Du et al., IEEE OJCS 2 (2021), UAV-assisted VDTN message size 500 KB--1 MB. |
 | Report TTL | 300 s | Literature-backed baseline | Du et al. 2021 explicitly uses message TTL 300 s. |
-| UAV application buffer | 100 MB | Literature-backed baseline | Du et al. 2021 explicitly gives UAV buffer size 100 MB in the isolated-area UAV scenario. |
+| UAV application buffer | 3 MB (3 complete reports) | Research design, workload-coupled | Du et al. 2021 reports a 100 MB UAV buffer, but that cannot bind with this scenario's maximum 10 MB report workload. The 3 MB capacity is deliberately **not** presented as a paper value. |
 | Battery capacity | 77 Wh = 277.2 kJ | Literature-backed hardware baseline + scenario calibration | Mavic 3 Enterprise value reported in *Energy-Aware Multilingual Vision–Language Models for Drone Smart Sensing*, Drones 10 (2026) 361. In 50 aggressive 3D no-TX episodes of 600 s, mean final swarm battery was 72.68% and no UAV depleted. This is a hardware reference, not a root-paper constant. |
 | Neighbor-cache freshness | 5 s | Research adaptation from UavNetSim native behavior | The pinned UavNetSim virtual-force neighbor table uses a 5 s entry lifetime. `u6` mirrors that lifetime in its actor-visible cache; it does not use UavNetSim's table object directly. |
 | Movement + next-hop + transmit-power joint control | yes | Literature-backed concept | MRMG, arXiv:2606.06954, jointly learns UAV movement, next-hop selection and transmit-power control. The exact continuous encoding in `u6` is not copied from MRMG. |
+| Continuous sensing footprint | exact UAV XY + circular footprint/cell intersection | Literature-backed geometry + research rasterization | Hu et al. 2014 defines the sensing disk from the UAV planar coordinate and cell locations and explicitly assumes cells are small relative to the footprint. Because this project uses 100 m cells with a 50 m minimum radius, it uses exact circle/cell geometry rather than Hu's small-cell approximation. |
+| Routing actor lifecycle context | TTL/age, held fraction, delivery progress, local/cached queue, contact degree, GCS progress | Literature-backed concept + research encoding | JUROR (arXiv:2608.04590) uses buffer, TTL, age, hop/size/destination context and a shared team reward. The exact fixed-width encoding here is project-specific. |
 
 ## `u6` topology calibration status
 
@@ -74,7 +76,7 @@ These choices have related literature, but **no source was found that specifies 
 | Same 2 km radius for UAV-UAV and UAV-GCS candidate links | yes | A simple project baseline; current hardened model requires a fresh topology recalibration. |
 | Static victim targets | yes | Retains the post-disaster root-task interpretation; Liu's 3D sensing paper uses moving targets. |
 | Overall sensing-task reward scale | existing `search_reward_coeff=20` | Liu supports the 1.0:0.1 relative weights, not this global scale. |
-| Belief fusion and cell confirmation | each UAV keeps a local posterior; threshold crossing is local. Minimum-entropy fusion occurs only at the receiver after a successfully delivered peer synchronization bundle; topology alone does not share belief. | The accessible Liu description supports belief-map search and the `0.99` threshold. The exact serialization/fusion transport is not sufficiently explicit, so the 4 KiB sync bundle and receiver-only fusion are deterministic research adaptations. |
+| Belief fusion and cell confirmation | each UAV keeps a local posterior; `0.99` creates a suspicious cell, while final target confirmation requires the UAV's own low/fine-altitude positive evidence. Receiver-only minimum-entropy fusion occurs only after a complete peer synchronization bundle. | Liu 2024 supports high-altitude broad search followed by descent for precise target capture. The exact 50 m final-confirmation gate, 4 KiB transport, 8-bit belief serialization, and receiver-only fusion are deterministic research adaptations. |
 
 ## Parameters still not sourced closely enough
 

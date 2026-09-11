@@ -76,6 +76,8 @@ def test_confirmation_threshold_creates_exactly_one_report_source():
     cy, cx = target_cell
     env.belief_maps[:, cy, cx] = 0.1
     env.belief_maps[0, cy, cx] = float(env.scenario["target_confirmation_threshold"])
+    env.fine_positive_cells_by_agent[0, cy, cx] = True
+    env.fine_target_evidence_by_agent[0, 0] = True
 
     env._confirm_peer_targets()
     env._retry_pending_reports()
@@ -114,17 +116,17 @@ def test_u6_continuous_sensing_uses_actual_altitude_between_reference_levels():
     assert profile.pd == pytest.approx(0.85)
     assert profile.pf == pytest.approx(0.15)
     assert profile.fov_radius_m == pytest.approx(75.0)
-    assert len(env._sensing_cells(0)) == 1
+    assert len(env._sensing_cells(0)) == 4
 
     env.positions[0, 2] = 125.0
     profile = env._sensing_profile(0)
     assert profile.pd == pytest.approx(0.75)
     assert profile.pf == pytest.approx(0.25)
     assert profile.fov_radius_m == pytest.approx(125.0)
-    assert len(env._sensing_cells(0)) == 5
+    assert len(env._sensing_cells(0)) == 12
 
     env.positions[0, 2] = 150.0
-    assert len(env._sensing_cells(0)) == 9
+    assert len(env._sensing_cells(0)) == 16
 
 
 def test_peer_observation_appends_fixed_nine_cell_belief_patch():
@@ -132,11 +134,11 @@ def test_peer_observation_appends_fixed_nine_cell_belief_patch():
     env.reset(seed=5)
     env.positions[0, :2] = [2500.0, 2500.0]
     obs = env._observations()
-    base_without_patch = 9 + (env.n_agents - 1) * 6 + env.n_targets + 5
 
-    assert env.obs_dim == base_without_patch + 9
+    assert obs["uav_0"].shape == (env.obs_dim,)
     patch = obs["uav_0"][-9:]
-    assert np.count_nonzero(patch) == len(env._sensing_cells(0))
+    assert patch.shape == (9,)
+    assert np.all((patch >= 0.0) & (patch <= 1.0))
 
 
 def test_u6_info_exposes_scalar_altitude_and_belief_sensing_diagnostics():
@@ -197,6 +199,7 @@ def test_empty_high_posterior_cell_is_recorded_as_false_confirmation():
     y, x = empty_cell
     env.belief_maps[:, y, x] = 0.5
     env.belief_maps[2, y, x] = env.peer_target_confirmation_threshold + 1e-4
+    env.fine_positive_cells_by_agent[2, y, x] = True
 
     env._confirm_peer_targets()
 
@@ -212,6 +215,8 @@ def test_true_target_confirmation_is_driven_by_confirmed_cell_and_tracks_source(
     y, x = put_target_in_uav_cell(env, agent_idx=0, target_idx=0)
     env.belief_maps[:, y, x] = 0.5
     env.belief_maps[3, y, x] = env.peer_target_confirmation_threshold + 1e-4
+    env.fine_positive_cells_by_agent[3, y, x] = True
+    env.fine_target_evidence_by_agent[3, 0] = True
 
     env._confirm_peer_targets()
 
@@ -228,6 +233,8 @@ def test_inactive_uav_belief_cannot_drive_fusion_or_target_confirmation():
     y, x = put_target_in_uav_cell(env, agent_idx=0, target_idx=0)
     env.belief_maps[:, y, x] = 0.5
     env.belief_maps[0, y, x] = env.peer_target_confirmation_threshold + 1e-4
+    env.fine_positive_cells_by_agent[0, y, x] = True
+    env.fine_target_evidence_by_agent[0, 0] = True
     env.uav_active[0] = False
     env.battery_pct[0] = 0.0
 

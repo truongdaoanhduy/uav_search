@@ -24,7 +24,7 @@ def idle_actions(env: PaperUAVEnv):
 def test_u6_literature_backed_report_buffer_lifetime_and_power_defaults():
     cfg = load_config("masac", "u6")["scenario"]
     assert cfg["report_bytes"] == 1_000_000
-    assert cfg["buffer_bytes"] == 100_000_000
+    assert cfg["buffer_bytes"] == 3_000_000
     assert cfg["report_ttl_s"] == pytest.approx(300.0)
     assert cfg["uavnetsim_tx_power_w"] == pytest.approx(0.1)
     assert cfg["tx_power_min_w"] == pytest.approx(0.1)
@@ -63,7 +63,7 @@ def test_tx_power_action_maps_to_literature_backed_peak_range():
     assert env._decode_tx_power_w(1.0) == pytest.approx(0.4)
 
 
-def test_actor_own_network_slot_reports_direct_gcs_not_global_multihop_path():
+def test_actor_own_network_slot_reports_local_contact_degree_not_global_multihop_path():
     env = make_env(seed=46)
     env.last_adjacency.fill(0)
     env.last_gcs_rates_bps.fill(0.0)
@@ -72,7 +72,7 @@ def test_actor_own_network_slot_reports_direct_gcs_not_global_multihop_path():
     env.last_adjacency[0, 1] = 1  # UAV1 -> UAV0, so UAV1 has a two-hop path.
     assert env._gcs_hops()[1] == 2
     obs = env._observations()["uav_1"]
-    assert obs[7] == pytest.approx(0.0)
+    assert obs[7] == pytest.approx(1.0 / (env.n_agents - 1))
 
 
 def test_neighbor_freshness_does_not_treat_reverse_only_edge_as_live():

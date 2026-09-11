@@ -139,11 +139,11 @@ def continuous_profile_for_altitude(
 def continuous_fov_offsets(
     fov_radius_m: float, grid_cell_m: float
 ) -> tuple[tuple[int, int], ...]:
-    """Rasterize a circular ground FoV using grid-cell center offsets.
+    """Legacy center-offset rasterization helper for diagnostics/discrete use.
 
-    This keeps the physical FoV radius continuous while converting it to the
-    discrete belief grid used by the environment. With a 100 m grid and a 90°
-    full FoV, radii 50/100/150 m reproduce Liu et al.'s 1/5/9-cell anchors.
+    Homogeneous-peer sensing uses :func:`continuous_fov_cells` instead because
+    the physical footprint must be evaluated at the UAV's exact continuous XY
+    position rather than implicitly snapping the vehicle to a grid-cell center.
     """
     radius = float(fov_radius_m)
     cell = float(grid_cell_m)
@@ -162,6 +162,53 @@ def continuous_fov_offsets(
     if (0, 0) not in offsets:
         offsets.append((0, 0))
     return tuple(offsets)
+
+
+def continuous_fov_cells(
+    center_xy: np.ndarray,
+    fov_radius_m: float,
+    grid_cell_m: float,
+    grid_n: int,
+) -> tuple[tuple[int, int], ...]:
+    """Return grid cells intersected by a circular footprint at an exact XY pose.
+
+    A cell is included when the footprint overlaps any non-zero part of its
+    square.  Unlike offset rasterization, this remains correct when the UAV is
+    close to a cell boundary instead of implicitly snapping it to a cell center.
+    """
+    center = np.asarray(center_xy, dtype=np.float64)
+    radius = float(fov_radius_m)
+    cell = float(grid_cell_m)
+    size = int(grid_n)
+    if center.shape != (2,) or np.any(~np.isfinite(center)):
+        raise ValueError("center_xy must contain two finite coordinates")
+    if not math.isfinite(radius) or radius < 0.0:
+        raise ValueError("fov_radius_m must be finite and non-negative")
+    if not math.isfinite(cell) or cell <= 0.0:
+        raise ValueError("grid_cell_m must be finite and positive")
+    if size <= 0:
+        raise ValueError("grid_n must be positive")
+
+    min_x = max(0, int(math.floor((center[0] - radius) / cell)))
+    max_x = min(size - 1, int(math.floor((center[0] + radius) / cell)))
+    min_y = max(0, int(math.floor((center[1] - radius) / cell)))
+    max_y = min(size - 1, int(math.floor((center[1] + radius) / cell)))
+    tolerance = max(1e-9, 1e-12 * max(radius, cell))
+    cells: list[tuple[int, int]] = []
+    for y in range(min_y, max_y + 1):
+        y0, y1 = y * cell, (y + 1) * cell
+        closest_y = float(np.clip(center[1], y0, y1))
+        for x in range(min_x, max_x + 1):
+            x0, x1 = x * cell, (x + 1) * cell
+            closest_x = float(np.clip(center[0], x0, x1))
+            distance = math.hypot(center[0] - closest_x, center[1] - closest_y)
+            # Require positive-area overlap. A cell that only touches the circular
+            # footprint tangentially has zero covered area and must not generate a
+            # sensor measurement. Preserve the containing cell for the degenerate
+            # zero-radius case.
+            if (radius <= tolerance and distance <= tolerance) or distance < radius - tolerance:
+                cells.append((y, x))
+    return tuple(cells)
 
 
 def fov_offsets(size: int) -> tuple[tuple[int, int], ...]:

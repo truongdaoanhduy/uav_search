@@ -74,8 +74,8 @@ class RunLogger:
             signals.append("communication_low")
             if "link_unstable" not in signals:
                 signals.append("link_unstable")
-        if int(metrics.get("collided_uavs", 0)) > 0 or int(metrics.get("obstacle_hit_uavs", 0)) > 0:
-            signals.append("collision_high")
+        if int(metrics.get("safety_distance_violation_uavs", 0)) > 0 or int(metrics.get("obstacle_hit_uavs", 0)) > 0:
+            signals.append("safety_distance_violation_high")
         if int(metrics.get("depleted_uavs", 0)) > 0 or float(metrics.get("avg_battery_pct", 100.0)) <= 15.0:
             signals.append("energy_high")
         if float(metrics.get("action_saturation", 0.0)) >= 0.8:
@@ -90,7 +90,7 @@ class RunLogger:
         critical = {"critic_unstable"}
         if critical.intersection(signals):
             return "critical"
-        if int(metrics.get("collided_uavs", 0)) >= 3 or int(metrics.get("depleted_uavs", 0)) > 0:
+        if int(metrics.get("safety_distance_violation_uavs", 0)) >= 3 or int(metrics.get("depleted_uavs", 0)) > 0:
             return "critical"
         if len(signals) >= 4:
             return "critical"
@@ -107,7 +107,7 @@ class RunLogger:
         # live scalars, but do not flood the anomaly table unless safety/energy or
         # optimizer health indicates a real failure.
         if str(metrics.get("phase", "")) == "warmup":
-            hard_warmup_signals = {"collision_high", "energy_high", "critic_unstable"}
+            hard_warmup_signals = {"safety_distance_violation_high", "energy_high", "critic_unstable"}
             signals = [signal for signal in signals if signal in hard_warmup_signals]
         low_by_return = False
         if len(historical) >= 3:

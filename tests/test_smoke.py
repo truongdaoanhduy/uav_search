@@ -44,7 +44,7 @@ def test_two_episode_training_pipeline_creates_artifacts(algorithm, tmp_path):
         assert col in ep.columns
         assert ep[col].map(lambda value: pd.notna(value)).all()
     for col in [
-        "avg_battery_pct", "depleted_uavs", "collided_uavs", "obstacle_hit_uavs",
+        "avg_battery_pct", "depleted_uavs", "safety_distance_violation_uavs", "obstacle_hit_uavs",
         "boundary_hit_uavs", "broken_link_uavs", "fixed_return_mean", "rotor_return_mean",
     ]:
         assert col in ep.columns
@@ -95,7 +95,7 @@ def test_wandb_update_metrics_are_throttled_to_every_100_updates(monkeypatch, tm
     assert len(episode_payloads) == 1
     episode_payload = episode_payloads[0]
     assert "swarm/avg_battery_pct" in episode_payload
-    assert "swarm/collided_uavs" in episode_payload
+    assert "swarm/safety_distance_violation_uavs" in episode_payload
     assert "group/fixed_return_mean" in episode_payload
     assert "group/rotor_return_mean" in episode_payload
     assert not any("/agent/" in key or "worst_agent" in key for key in episode_payload)
