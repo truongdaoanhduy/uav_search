@@ -734,10 +734,11 @@ class PaperUAVEnv:
     def _peer_link_features(self, sender: int, recipient: int) -> list[float]:
         """Return recipient-specific min/max-power feasibility observable at sender.
 
-        These are instantaneous local link-estimate features, not cached peer state.
-        Keeping them outside the neighbor cache prevents a stale cache from making
-        the routing head blind to which currently reachable peer actually needs
-        higher RF power.
+        These are instantaneous sender-side radio/channel-sounding estimates,
+        not cached peer state or privileged peer position/battery. Keeping them
+        outside the neighbor cache prevents stale application metadata from making
+        the routing head blind to which candidate link currently needs higher RF
+        power. This sensing abstraction is a documented research adaptation.
         """
         if not self.peer_mode:
             return [0.0, 0.0]
@@ -948,10 +949,26 @@ class PaperUAVEnv:
                         self.report_created_step[target_idx]
                     )
                 elif not self.report_generated[target_idx] and not self.report_delivered[target_idx]:
-                    # A later independent fine observation may regenerate a report
-                    # after an earlier generation expired or was never enqueued.
-                    if self.pending_report_source[target_idx] < 0:
-                        self.pending_report_source[target_idx] = detector
+                    # A new TTL generation after expiry requires fresh direct fine
+                    # evidence in this sensing phase. Persistent historical
+                    # fine_target_evidence is provenance, not a new observation.
+                    fresh_fine_positive = bool(
+                        self.last_sensor_positive[detector, target_idx]
+                        and self.positions[detector, 2]
+                        <= self.peer_fine_confirmation_max_altitude_m + 1e-9
+                    )
+                    if fresh_fine_positive:
+                        # Fresh information exists now, even if finite buffer space
+                        # prevents immediate serialization. Start TTL at observation
+                        # time so waiting for storage does not extend its lifetime.
+                        if self.report_created_step[target_idx] < 0:
+                            self.report_created_step[target_idx] = int(self.step_count)
+                        self.report_created_step_known_by_agent[detector, target_idx] = int(
+                            self.report_created_step[target_idx]
+                        )
+                        pending = int(self.pending_report_source[target_idx])
+                        if pending < 0 or pending >= self.n_agents or not self.uav_active[pending]:
+                            self.pending_report_source[target_idx] = detector
 
         for y_raw, x_raw in candidate_cells:
             y, x = int(y_raw), int(x_raw)
@@ -1273,16 +1290,28 @@ class PaperUAVEnv:
             if source < 0 or not self.target_found[target_idx] or self.report_generated[target_idx]:
                 continue
 
-            # Prefer the original detector while it is active, then any other
-            # active UAV that independently confirmed the target. Peer-shared
-            # metadata alone is deliberately insufficient to synthesize a new
-            # full mission report payload.
+            # Prefer the original detector while it is active. Before any TTL
+            # expiry, another independently-confirming active UAV may synthesize
+            # the same generation. After expiry, fallback is restricted below to
+            # the pending fresh source or another current fresh fine observer.
+            # Peer-shared metadata alone is deliberately insufficient.
             candidates: list[int] = []
             if 0 <= source < self.n_agents and self.uav_active[source]:
                 candidates.append(source)
-            independent = np.flatnonzero(
+            independent_mask = (
                 self.uav_active & self.target_directly_confirmed_by_agent[:, target_idx]
             )
+            if self.report_expired[target_idx]:
+                # After an expiry, only the observer that originated the pending
+                # fresh generation (plus another UAV with a fresh fine-positive
+                # observation in this same sensing phase) may synthesize it. This
+                # prevents stale historical confirmation at a different UAV from
+                # silently resetting the message TTL.
+                fine_now = self.positions[:, 2] <= (
+                    self.peer_fine_confirmation_max_altitude_m + 1e-9
+                )
+                independent_mask &= self.last_sensor_positive[:, target_idx] & fine_now
+            independent = np.flatnonzero(independent_mask)
             candidates.extend(int(i) for i in independent if int(i) not in candidates)
             for candidate in candidates:
                 if self._enqueue_report(candidate, target_idx):
@@ -1305,18 +1334,17 @@ class PaperUAVEnv:
                     self.report_buffers[target_idx, holder] = 0
                     self.queue_bytes[holder] = max(0, int(self.queue_bytes[holder]) - amount)
             # TTL is scoped to the current report generation/copies, not to the
-            # target forever. Purge stale copies, record the loss, then allow an
-            # independently-confirming active UAV to regenerate fresh information.
+            # target forever. Purge stale copies and record the loss. Historical
+            # confirmation alone is not fresh information and therefore cannot
+            # mint a new TTL generation; regeneration requires a later fine
+            # positive observation in _confirm_peer_targets().
             self.report_generated[target_idx] = False
             self.report_created_step[target_idx] = -1
             self.report_delivered_bytes[target_idx] = 0
             self.report_created_step_known_by_agent[:, target_idx] = -1
             self.report_delivery_progress_known_by_agent[:, target_idx] = 0.0
             self.report_expired[target_idx] = True  # historical diagnostic flag
-            independent = np.flatnonzero(
-                self.uav_active & self.target_directly_confirmed_by_agent[:, target_idx]
-            )
-            self.pending_report_source[target_idx] = int(independent[0]) if independent.size else -1
+            self.pending_report_source[target_idx] = -1
             self.last_reports_expired_step += 1
             self.expired_reports += 1
 
@@ -1981,15 +2009,17 @@ class PaperUAVEnv:
                     self.episode_safety_violation_uavs.update((int(i), int(j)))
 
         if self.peer_mode:
-            # A UAV that exhausted its battery while moving cannot sense/relay in
-            # the same macro-step. It remains at its last position for rendering.
+            # A UAV that exhausted its battery while moving cannot communicate or
+            # sense in this macro-step. It remains at its last position for rendering.
             self.uav_active &= self.battery_pct > 0.0
             self.velocities[~self.uav_active] = 0.0
         self._refresh_links()
         if self.peer_mode:
-            self._expire_reports()
-            self._perform_peer_target_detection()
-            self._retry_pending_reports()
+            # Causal slot order: the joint action a_t may communicate only
+            # information that existed when a_t was chosen. New sensing evidence
+            # produced later in this transition becomes eligible for TX at t+1.
+            # Existing reports also get their final forwarding opportunity before
+            # TTL expiry, matching store-carry-forward lifecycle semantics.
             self._peer_transmit(act)
             # Charge every UAV's radio TX energy, including native UavNetSim ACKs
             # and retransmissions. GCS radio energy is deliberately excluded from
@@ -2010,6 +2040,13 @@ class PaperUAVEnv:
                     0.0,
                     self.battery_pct[i] - 100.0 * e_net / self.peer_battery_capacity_j,
                 )
+            # A radio-depleted UAV must not obtain fresh sensing evidence later in
+            # the same transition.
+            self.uav_active &= self.battery_pct > 0.0
+            self.velocities[~self.uav_active] = 0.0
+            self._expire_reports()
+            self._perform_peer_target_detection()
+            self._retry_pending_reports()
             broken_mask = self._gcs_hops() < 0
         else:
             broken_mask = self.last_rates_bps < self.paper["min_comm_rate_bps"]
@@ -2060,7 +2097,8 @@ class PaperUAVEnv:
         }
 
         # Paper-faithful scenarios confirm only after Eq. (24), preserving the
-        # published reward timing. u6 performs sensing before communication above.
+        # published reward timing. Homogeneous peer scenarios communicate queued
+        # information first and perform current-step sensing afterward.
         if not self.peer_mode:
             for k in range(self.n_targets):
                 if self.target_found[k]:

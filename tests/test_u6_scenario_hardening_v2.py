@@ -120,7 +120,7 @@ def test_discrete_time_barrier_shield_filters_unsafe_motion_before_state_transit
     assert info["safety_distance_violations"] == 0
 
 
-def test_report_expiry_is_packet_level_loss_not_terminal_mission_failure_and_can_regenerate() -> None:
+def test_report_expiry_is_packet_level_loss_not_terminal_and_requires_fresh_evidence_to_regenerate() -> None:
     cfg = deepcopy(load_config("masac", "u6"))
     cfg["scenario"]["network_backend"] = "analytical"
     cfg["scenario"]["report_ttl_s"] = 1.0
@@ -138,9 +138,10 @@ def test_report_expiry_is_packet_level_loss_not_terminal_mission_failure_and_can
     assert not any(terminated.values())
     assert info["termination_reason"] in {"running", "horizon"}
     assert env.expired_reports >= 1
-    assert env.report_generated[0]
-    assert env.report_created_step[0] >= 1
-    assert env.report_buffers[0, 0] == env.peer_report_bytes
+    assert not env.report_generated[0]
+    assert env.report_created_step[0] == -1
+    assert env.pending_report_source[0] == -1
+    assert env.report_buffers[0].sum() == 0
 
 
 def test_native_peer_rate_reaches_configured_max_communication_reward() -> None:

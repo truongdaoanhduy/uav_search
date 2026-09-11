@@ -46,6 +46,10 @@ scenario:
   sensing_target_reward_weight: 1.0
   sensing_cognitive_reward_weight: 0.1
   sensing_reward_weight_provenance: "CORE_PAPER_EXPLICIT:LIU_2024_3D_SEARCH"
+  # Onboard short-range geometry sensor used only for local obstacle/peer
+  # proximity features. The 300 m radius is an explicit project assumption.
+  proximity_sensor_range_m: 300.0
+  proximity_sensor_range_provenance: RESEARCH_ASSUMPTION
   # Hybrid option C: mission/mobility stay in PaperUAVEnv; UavNetSim owns peer MAC/PHY.
   network_backend: uavnetsim
   network_backend_provenance: RESEARCH_ADAPTATION
@@ -151,8 +155,9 @@ scenario:
   expiry_penalty: 20.0
   expiry_penalty_provenance: "RESEARCH_DESIGN:SYMMETRIC_WITH_DELIVERY_REWARD"
   # TTL expiry purges the current report generation/copies and incurs expiry
-  # penalty; it is not mission-terminal. Independent fine evidence can regenerate
-  # a fresh report, which receives a new TTL at creation.
+  # penalty; it is not mission-terminal. Forwarding is attempted before expiry in
+  # each slot. A new TTL generation requires a fresh low/fine positive observation
+  # after expiry; persistent historical confirmation alone cannot reset the TTL.
   report_ttl_s: 300.0
   report_ttl_provenance: "LITERATURE_BACKED_BASELINE:DU_2021_UAV_ASSISTED_VDTN_300S_TTL;LIFECYCLE_RESEARCH_ADAPTATION:JUROR_MESSAGE_LEVEL_EXPIRY"
   # DJI Mavic 3 Enterprise is a close small-multirotor hardware reference; published

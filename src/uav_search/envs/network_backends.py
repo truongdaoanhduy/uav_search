@@ -255,7 +255,19 @@ class AnalyticalNetworkBackend:
             capacity = int(max(0.0, rate) * max(float(dt_s), 0.0) / 8.0)
             sent = min(requested, capacity) if rate > float(self.paper["min_comm_rate_bps"]) else 0
             delay = float(sent * 8.0 / rate) if sent > 0 and rate > 0 else 0.0
-            energy = tx_power_w * delay
+            if sent > 0:
+                energy = tx_power_w * delay
+            else:
+                # The policy explicitly commanded a transmission attempt. Even
+                # when the selected link is outside the candidate envelope / below
+                # the usable-rate threshold, the sender spends airtime probing it.
+                # Bound that failed-attempt airtime by the RL macro-step.
+                nominal_bitrate = max(
+                    float(self.scenario.get("uavnetsim_bit_rate_bps", self.assumed.get("comm_rate_max_bps", 1.0))),
+                    1.0,
+                )
+                attempt_s = min(max(float(dt_s), 0.0), requested * 8.0 / nominal_bitrate)
+                energy = tx_power_w * attempt_s
             delivered += sent
             if sent > 0:
                 delays.append(delay)
@@ -872,8 +884,15 @@ class UavNetSimBackend:
                 ))
                 continue
             if distance > self._effective_contact_range_m(tx_power, gcs=(recipient == GCS_NODE)):
+                nominal_bitrate = max(float(params["BIT_RATE"]), 1.0)
+                attempt_s = min(
+                    max(float(dt_s), 0.0),
+                    max(0, int(intent.requested_bytes)) * 8.0 / nominal_bitrate,
+                )
                 prefailed.append(TransmissionOutcome(
-                    sender, recipient, int(intent.requested_bytes), 0, 0.0, distance
+                    sender, recipient, int(intent.requested_bytes), 0, 0.0, distance,
+                    delay_s=attempt_s,
+                    tx_energy_j=tx_power * attempt_s,
                 ))
                 continue
             gain = self._gain(
@@ -887,6 +906,12 @@ class UavNetSimBackend:
 
         if not valid_intents:
             self._advance_episode_time(simulator, dt_s)
+            prefailed_energy: dict[int, float] = {}
+            for outcome in prefailed:
+                if 0 <= int(outcome.sender) < n_agents and outcome.tx_energy_j > 0.0:
+                    prefailed_energy[int(outcome.sender)] = (
+                        prefailed_energy.get(int(outcome.sender), 0.0) + float(outcome.tx_energy_j)
+                    )
             return NetworkStepResult(
                 outcomes=prefailed,
                 attempted_bytes=attempted,
@@ -895,7 +920,8 @@ class UavNetSimBackend:
                 throughput_bps=0.0,
                 mean_delay_s=0.0,
                 phy_failures=len(prefailed),
-                tx_energy_j=0.0,
+                tx_energy_j=float(sum(prefailed_energy.values())),
+                node_tx_energy_j=prefailed_energy,
             )
 
         packets: dict[int, tuple[Any, TransmissionIntent, int, int]] = {}
@@ -1005,6 +1031,11 @@ class UavNetSimBackend:
             delivered_total = 0
             step_events = event_bus.events[event_start:]
             node_tx_energy: dict[int, float] = {}
+            for outcome in prefailed:
+                if 0 <= int(outcome.sender) < n_agents and outcome.tx_energy_j > 0.0:
+                    node_tx_energy[int(outcome.sender)] = (
+                        node_tx_energy.get(int(outcome.sender), 0.0) + float(outcome.tx_energy_j)
+                    )
             data_energy_by_intent: dict[tuple[int, int], float] = {key: 0.0 for key in intent_meta}
             for event_type, _time_us, data in step_events:
                 if event_type != "packet_tx_energy":
