@@ -147,7 +147,7 @@ def test_uavnetsim_full_slot_request_accounts_for_csma_and_header_overhead():
     assert 0.0 < result.byte_pdr <= 1.0
 
 
-def test_uavnetsim_reports_only_the_longest_in_order_delivered_prefix():
+def test_uavnetsim_closed_slot_delivers_one_contiguous_application_prefix():
     import importlib.util
 
     if importlib.util.find_spec("simpy") is None or importlib.util.find_spec("phy.channel") is None:
@@ -172,8 +172,8 @@ def test_uavnetsim_reports_only_the_longest_in_order_delivered_prefix():
 
     outcome = result.outcomes[0]
     delivered_prefix = getattr(outcome, "delivered_prefix_bytes", outcome.delivered_bytes)
-    assert 0 < delivered_prefix < outcome.delivered_bytes
-    assert delivered_prefix == 1024
+    assert delivered_prefix == outcome.delivered_bytes
+    assert delivered_prefix > 100_000
 
 
 def test_uavnetsim_native_ack_is_enabled_and_policy_recipient_is_preserved():

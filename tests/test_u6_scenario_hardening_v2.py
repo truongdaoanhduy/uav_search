@@ -144,7 +144,7 @@ def test_report_expiry_is_packet_level_loss_not_terminal_and_requires_fresh_evid
     assert env.report_buffers[0].sum() == 0
 
 
-def test_native_peer_rate_reaches_configured_max_communication_reward() -> None:
+def test_native_gcs_rate_reward_scales_with_committed_report_bytes() -> None:
     env = make_env(seed=106)
     env.last_tx_active[0] = True
     env.last_report_bytes_attempted_by_agent[0] = 1024
@@ -153,4 +153,5 @@ def test_native_peer_rate_reaches_configured_max_communication_reward() -> None:
     env.last_selected_tx_rate_bps[0] = float(env.scenario["uavnetsim_bit_rate_bps"])
     env.last_selected_tx_distance_m[0] = 1000.0
 
-    assert env._communication_reward(0) == pytest.approx(float(env.assumed["comm_reward_max"]))
+    expected = float(env.assumed["comm_reward_max"]) * 1024 / env.peer_report_bytes
+    assert env._communication_reward(0) == pytest.approx(expected)

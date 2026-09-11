@@ -57,9 +57,9 @@ scenario:
   uavnetsim_channel_mode_provenance: UAVNETSIM_NATIVE
   uavnetsim_bit_rate_bps: 2000000
   uavnetsim_bit_rate_provenance: UAVNETSIM_NATIVE
-  # Align the reachable maximum positive communication-reward branch with the
-  # backend's native successful-link rate rather than the root paper's 10 Mbps
-  # normalization placeholder, which is unreachable in this UavNetSim profile.
+  # Normalize actor-visible link-rate features with the backend's native
+  # successful-link rate rather than the root paper's unreachable 10 Mbps
+  # placeholder. GCS progress reward itself is proportional to ACKed bytes.
   communication_reward_rate_bps: 2000000
   communication_reward_rate_provenance: "RESEARCH_ADAPTATION:UAVNETSIM_NATIVE_BIT_RATE_ALIGNMENT"
   # RF transmit power is deliberately separate from the root paper's P_com=5 W
@@ -105,6 +105,12 @@ scenario:
   # metadata; the exact serialization size is a project assumption, not paper-explicit.
   peer_sync_bytes: 4096
   peer_sync_bytes_provenance: RESEARCH_ASSUMPTION
+  # Wang et al. (Ad Hoc Networks 2026) explicitly penalize multi-hop
+  # communication attempts so the gating policy does not transmit redundantly.
+  # Their public text does not expose a transferable numeric coefficient, so this
+  # small value is a project calibration parameter rather than a paper constant.
+  communication_attempt_penalty: 0.1
+  communication_attempt_penalty_provenance: "LITERATURE_BACKED_CONCEPT:WANG_2026_COMM_ATTEMPT_PENALTY;RESEARCH_DESIGN_CALIBRATION_REQUIRED"
   targets: 10
   targets_provenance: "LITERATURE_BACKED_BASELINE:AO_ROOT_10_TARGET_SCENARIOS"
   obstacles: 6

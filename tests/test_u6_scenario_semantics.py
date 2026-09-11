@@ -421,3 +421,76 @@ def test_continuous_footprint_excludes_zero_area_tangent_neighbor_cells() -> Non
     env.positions[0] = np.asarray([50.0, 50.0, 50.0])
 
     assert env._sensing_cells(0) == [(0, 0)]
+
+
+def test_successful_peer_report_forward_does_not_create_positive_loop_reward() -> None:
+    env = make_env(seed=81)
+    env.positions[0] = np.asarray([500.0, 2500.0, 100.0])
+    env.positions[1] = np.asarray([600.0, 2500.0, 100.0])
+    env._refresh_links()
+    assert env._enqueue_report(0, 0)
+
+    actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
+    actions[:, 0] = -1.0
+    actions[:, 3] = -1.0
+    actions[:, 4] = -1.0
+    actions[:, 5] = -1.0
+    actions[0, 3] = 1.0
+    actions[0, 4] = 1.0
+    actions[0, 5] = recipient_code(env, 0, 1)
+
+    env._peer_transmit(actions)
+
+    assert env.last_report_bytes_transmitted_by_agent[0] > 0
+    assert env.report_buffers[0, 1] > 0
+    assert env._communication_reward(0) <= 0.0
+
+
+def test_peer_sync_attempt_has_explicit_overhead_penalty() -> None:
+    env = make_env(seed=82)
+    env.positions[0] = np.asarray([500.0, 2500.0, 100.0])
+    env.positions[1] = np.asarray([600.0, 2500.0, 100.0])
+    env._refresh_links()
+
+    actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
+    actions[:, 0] = -1.0
+    actions[:, 3] = -1.0
+    actions[:, 4] = -1.0
+    actions[:, 5] = -1.0
+    actions[0, 3] = 1.0
+    actions[0, 4] = 1.0
+    actions[0, 5] = recipient_code(env, 0, 1)
+
+    env._peer_transmit(actions)
+
+    assert env.last_tx_success[0]
+    assert env.last_report_bytes_attempted_by_agent[0] == 0
+    assert env._communication_reward(0) < 0.0
+
+
+def test_accumulated_posterior_and_direct_fine_evidence_can_confirm_later() -> None:
+    env = make_env(seed=83)
+    isolate_agent(env)
+    target_idx = 0
+    y, x = env._target_grid_cell(target_idx)
+    env.positions[0, 2] = env.peer_altitude_max_m
+    env.belief_maps[0, y, x] = env.peer_target_confirmation_threshold + 1e-4
+    env.fine_positive_cells_by_agent[0, y, x] = True
+    env.fine_target_evidence_by_agent[0, target_idx] = True
+    env.last_sensor_positive[0, target_idx] = False
+
+    env._confirm_peer_targets()
+
+    assert env.target_found[target_idx]
+    assert env.confirmed_cells[y, x]
+
+
+def test_native_gcs_rate_is_normalized_to_one_in_peer_observation() -> None:
+    env = make_env(seed=84)
+    env.last_gcs_rates_bps[0] = float(env.scenario["uavnetsim_bit_rate_bps"])
+
+    obs = env._observations()["uav_0"]
+    peer_extra_start = 9 + (env.n_agents - 1) * env.peer_neighbor_obs_dim + env.peer_report_obs_dim
+    gcs_rate_feature = obs[peer_extra_start + 3]
+
+    assert gcs_rate_feature == pytest.approx(1.0)

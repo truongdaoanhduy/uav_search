@@ -24,9 +24,11 @@ GCS_RECIPIENT = -1
 
 
 class PaperUAVEnv:
-    """Compact 2.5D heterogeneous-UAV environment reproducing the paper's software model.
+    """Multi-agent UAV environment for root-paper and homogeneous research scenarios.
 
-    API intentionally mirrors a PettingZoo ParallelEnv tuple without requiring PettingZoo.
+    Legacy scenarios retain the paper's 2.5D heterogeneous model; ``u6``/``u9``
+    use full-3D homogeneous peers. The dict-based reset/step contract is custom
+    and Gymnasium-like; this class is not a PettingZoo ``ParallelEnv``.
     """
 
     action_dim = 2
@@ -79,6 +81,9 @@ class PaperUAVEnv:
             self.peer_report_ttl_s = float(self.scenario.get("report_ttl_s", self.scenario.get("report_ttl_steps", 300) * self.dt))
             self.peer_neighbor_cache_ttl_steps = int(self.scenario.get("neighbor_cache_ttl_steps", 50))
             self.peer_sync_bytes = int(self.scenario.get("peer_sync_bytes", 4096))
+            self.peer_communication_attempt_penalty = float(
+                self.scenario.get("communication_attempt_penalty", 0.0)
+            )
             self.peer_sync_quantization_levels = int(
                 self.scenario.get("peer_sync_quantization_levels", 256)
             )
@@ -179,6 +184,8 @@ class PaperUAVEnv:
                 raise ValueError("report_bytes and buffer_bytes must be positive")
             if self.peer_expiry_penalty < 0.0:
                 raise ValueError("expiry_penalty must be non-negative")
+            if self.peer_communication_attempt_penalty < 0.0:
+                raise ValueError("communication_attempt_penalty must be non-negative")
             if self.peer_report_ttl_s <= 0 or self.peer_neighbor_cache_ttl_steps <= 0:
                 raise ValueError("report_ttl_s and neighbor_cache_ttl_steps must be positive")
             if self.peer_sync_bytes <= 0:
@@ -432,6 +439,9 @@ class PaperUAVEnv:
         self.safety_distance_violation_count = 0
         self.last_safety_filter_interventions = 0
         self.total_safety_filter_interventions = 0
+        self.last_safety_correction_m_by_agent = np.zeros(
+            self.n_agents, dtype=np.float64
+        )
         self.obstacle_hits = 0
         self.boundary_hits = 0
         # Episode-level unique UAV counts are diagnostic aggregates only; they do
@@ -454,6 +464,7 @@ class PaperUAVEnv:
             self.last_selected_tx_rate_bps = np.zeros(self.n_agents, dtype=np.float64)
             self.last_selected_tx_distance_m = np.full(self.n_agents, np.inf, dtype=np.float64)
             self.last_selected_tx_power_w = np.zeros(self.n_agents, dtype=np.float64)
+            self.last_selected_recipient = np.full(self.n_agents, GCS_RECIPIENT, dtype=np.int64)
             self.last_tx_active = np.zeros(self.n_agents, dtype=bool)
             self.last_tx_success = np.zeros(self.n_agents, dtype=bool)
             self.last_delivery_reward_by_agent = np.zeros(self.n_agents, dtype=np.float64)
@@ -984,10 +995,9 @@ class PaperUAVEnv:
                 idx for idx in targets_by_cell.get((y, x), []) if not self.target_found[idx]
             ]
             if true_targets:
+                target_ids = np.asarray(true_targets, dtype=np.int64)
                 has_target_evidence = np.any(
-                    self.fine_target_evidence_by_agent[
-                        np.ix_(eligible, np.asarray(true_targets, dtype=np.int64))
-                    ],
+                    self.fine_target_evidence_by_agent[np.ix_(eligible, target_ids)],
                     axis=1,
                 )
                 eligible = eligible[has_target_evidence]
@@ -1195,7 +1205,7 @@ class PaperUAVEnv:
             if self.peer_mode:
                 report_features = self._peer_report_features(i)
                 gcs_delta = (self.gcs_position[:2] - self.positions[i, :2]) / area
-                rate_scale = max(float(self.assumed["comm_rate_max_bps"]), 1.0)
+                rate_scale = max(float(self.peer_comm_reward_rate_bps), 1.0)
                 power_span = max(self.peer_tx_power_max_w - self.peer_tx_power_min_w, 1e-12)
                 selected_power = (
                     float(np.clip(
@@ -1459,6 +1469,7 @@ class PaperUAVEnv:
         self.last_selected_tx_rate_bps.fill(0.0)
         self.last_selected_tx_distance_m.fill(np.inf)
         self.last_selected_tx_power_w.fill(0.0)
+        self.last_selected_recipient.fill(GCS_RECIPIENT)
         self.last_tx_active.fill(False)
         self.last_tx_success.fill(False)
         self.last_delivery_reward_by_agent.fill(0.0)
@@ -1537,6 +1548,7 @@ class PaperUAVEnv:
                 report_requested = report_budget
 
             self.last_tx_active[sender] = True
+            self.last_selected_recipient[sender] = int(recipient)
             self.last_report_bytes_attempted_by_agent[sender] = int(report_requested)
             self.last_selected_tx_power_w[sender] = tx_power_w
             self.last_selected_tx_rate_bps[sender] = rate
@@ -1680,12 +1692,14 @@ class PaperUAVEnv:
         exposed to sensing/networking.  The legacy paper scenarios are untouched.
         A final rollback remains only as a numerical/constraint fallback.
         """
+        self.last_safety_correction_m_by_agent.fill(0.0)
         if not self.peer_mode or self.n_agents < 2:
             return
         safe = float(self.safety_distance_m)
         eps = 1e-6
-        interventions = 0
+        projection_tol = 1e-9
         active = self.uav_active.astype(bool)
+        nominal_positions = self.positions.copy()
         # Sequential projections converge quickly for the small U6/U9 swarms.
         for _ in range(max(2, 2 * self.n_agents)):
             changed = False
@@ -1701,12 +1715,12 @@ class PaperUAVEnv:
                     distance = float(np.linalg.norm(delta))
                     if prev_distance > safe + eps:
                         target_distance = safe + eps
-                        needs_filter = distance < target_distance
+                        needs_filter = distance < target_distance - projection_tol
                     else:
                         # For externally injected unsafe states, never make the
                         # separation smaller; allow a policy that is escaping.
                         target_distance = min(safe + eps, prev_distance + eps)
-                        needs_filter = distance <= prev_distance + eps
+                        needs_filter = distance < target_distance - projection_tol
                     if not needs_filter:
                         continue
                     direction = delta / distance if distance > eps else (
@@ -1716,7 +1730,6 @@ class PaperUAVEnv:
                     half = 0.5 * target_distance * direction
                     self.positions[i] = midpoint + half
                     self.positions[j] = midpoint - half
-                    interventions += 1
                     changed = True
             if not changed:
                 break
@@ -1744,14 +1757,12 @@ class PaperUAVEnv:
         if np.any(shield_boundary):
             self.boundary_hits += int(np.sum(shield_boundary))
             self.episode_boundary_hit_uavs.update(int(i) for i in np.flatnonzero(shield_boundary))
-            interventions += int(np.sum(shield_boundary))
         for i in np.flatnonzero(active):
             if any(segment_circle_collision(previous_positions[i, :2], self.positions[i, :2], c) for c in self.obstacles):
                 self.positions[i] = previous_positions[i]
                 self.velocities[i] = 0.0
                 self.obstacle_hits += 1
                 self.episode_obstacle_hit_uavs.add(int(i))
-                interventions += 1
 
         # Rare interactions among pair projection, speed limits, obstacle rollback,
         # and boundaries get a conservative fail-safe rather than an unsafe state.
@@ -1776,11 +1787,14 @@ class PaperUAVEnv:
             rejected_idx = np.fromiter(sorted(rejected), dtype=np.int64)
             self.positions[rejected_idx] = previous_positions[rejected_idx]
             self.velocities[rejected_idx] = 0.0
-            interventions += len(rejected)
 
         self.velocities[active] = (self.positions[active] - previous_positions[active]) / max(self.dt, 1e-12)
-        self.last_safety_filter_interventions = int(interventions)
-        self.total_safety_filter_interventions += int(interventions)
+        correction_m = np.linalg.norm(self.positions - nominal_positions, axis=1)
+        correction_m[~active] = 0.0
+        self.last_safety_correction_m_by_agent[:] = correction_m
+        corrected_uavs = int(np.count_nonzero(correction_m > projection_tol))
+        self.last_safety_filter_interventions = corrected_uavs
+        self.total_safety_filter_interventions += corrected_uavs
 
     def _task_reward(self, idx: int, fixed: bool) -> float:
         """Paper Eqs. (24)-(25): target-search reward for rotor/fixed-wing UAVs."""
@@ -1814,6 +1828,9 @@ class PaperUAVEnv:
         eta = float(self.assumed["safety_reward_coeff"])
         delta_d = float(self.assumed["reward_distance_epsilon_m"])
         penalty = 0.0
+        if self.peer_mode:
+            correction_m = float(self.last_safety_correction_m_by_agent[idx])
+            penalty -= eta * correction_m / max(float(self.safety_distance_m), delta_d)
         close = 0
         for j in range(self.n_agents):
             if j == idx:
@@ -1841,25 +1858,42 @@ class PaperUAVEnv:
         if self.peer_mode:
             if not self.last_tx_active[idx]:
                 return 0.0
+            recipient = int(self.last_selected_recipient[idx])
+            # The communication-gating literature explicitly penalizes multi-hop
+            # communication attempts to suppress redundant exchanges. Apply that
+            # cost to every peer-directed attempt, including control-only syncs.
+            peer_attempt_cost = (
+                self.peer_communication_attempt_penalty
+                if recipient != GCS_RECIPIENT else 0.0
+            )
             # Peer synchronization is useful only indirectly through better search;
-            # do not reward an empty control bundle. A report-bearing action is an
-            # actual attempt, however, and must be penalized when no report byte is
-            # ACKed; checking delivered bytes first made the failure branch dead.
+            # do not award it positive shaping.
             if self.last_report_bytes_attempted_by_agent[idx] <= 0:
-                return 0.0
+                return -peer_attempt_cost
             rate = float(self.last_selected_tx_rate_bps[idx])
+            committed_bytes = int(
+                self.last_report_bytes_transmitted_by_agent[idx]
+            )
             if (
                 rate < float(self.paper["min_comm_rate_bps"])
-                or self.last_report_bytes_transmitted_by_agent[idx] <= 0
+                or committed_bytes <= 0
+                or not self.last_tx_success[idx]
             ):
-                return -rc
-            if not self.last_tx_success[idx]:
-                return -rc
-            if rate >= self.peer_comm_reward_rate_bps:
-                return rc
-            distance_m = float(self.last_selected_tx_distance_m[idx])
-            delta_d = float(self.assumed["reward_distance_epsilon_m"])
-            return rc / (distance_m + delta_d)
+                return -rc - peer_attempt_cost
+            # Never award positive shaping merely for moving a report to another
+            # UAV. A peer copy can be sent back and forth, so hop-level positive
+            # reward creates a reward loop unrelated to mission completion. Final
+            # GCS delivery is rewarded separately by the shared delivery term.
+            if recipient != GCS_RECIPIENT:
+                return -peer_attempt_cost
+            # Link rate already determines how many application bytes are ACKed.
+            # Rewarding every nonempty fragment with the full maximum lets a slow
+            # or fragmented transfer collect more return than a clean delivery.
+            progress = min(
+                float(committed_bytes) / max(float(self.peer_report_bytes), 1.0),
+                1.0,
+            )
+            return rc * progress
 
         local_idx = self.multirotor_indices.index(idx)
         rate = float(self.last_rates_bps[local_idx])
@@ -1889,6 +1923,7 @@ class PaperUAVEnv:
             self.last_energy_by_agent_j.fill(0.0)
         self.safety_distance_violation_count = 0
         self.last_safety_filter_interventions = 0
+        self.last_safety_correction_m_by_agent.fill(0.0)
         self.obstacle_hits = 0
         self.boundary_hits = 0
         previous_positions = self.positions.copy()
@@ -2232,6 +2267,8 @@ class PaperUAVEnv:
             "safety_distance_violations": int(self.safety_distance_violation_count),
             "safety_filter_interventions": int(self.last_safety_filter_interventions) if self.peer_mode else 0,
             "safety_filter_interventions_total": int(self.total_safety_filter_interventions) if self.peer_mode else 0,
+            "safety_filter_correction_m": float(self.last_safety_correction_m_by_agent.sum()) if self.peer_mode else 0.0,
+            "max_safety_filter_correction_m": float(self.last_safety_correction_m_by_agent.max()) if self.peer_mode and self.n_agents else 0.0,
             "obstacle_hits": int(self.obstacle_hits),
             "boundary_hits": int(self.boundary_hits),
             "min_battery_pct": float(np.min(rotor_battery)) if self.n_rotor else 100.0,

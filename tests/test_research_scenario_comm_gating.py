@@ -151,7 +151,9 @@ def test_control_only_peer_sync_cannot_farm_communication_reward():
 
     assert env.last_tx_success[0]
     assert env.last_bytes_transmitted == 0
-    assert env._communication_reward(0) == pytest.approx(0.0)
+    assert env._communication_reward(0) == pytest.approx(
+        -env.peer_communication_attempt_penalty
+    )
 
 
 def test_partial_peer_sync_is_not_reported_to_actor_as_success(monkeypatch):

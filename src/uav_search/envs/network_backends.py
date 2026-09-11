@@ -209,7 +209,24 @@ class AnalyticalNetworkBackend:
         del step_index
         positions = np.asarray(positions, dtype=np.float64)
         gcs_position = np.asarray(gcs_position, dtype=np.float64)
-        snapshot = self.link_snapshot(positions, gcs_position, obstacles)
+        n_agents = int(len(positions))
+        # A transmission action is the source of interference. Geometrically
+        # present UAVs with their gate off are radio-silent and must not jam a
+        # lone sender in the analytical ablation.
+        active_tx_power_by_sender: dict[int, float] = {}
+        for active_intent in intents:
+            sender = int(active_intent.sender)
+            if not 0 <= sender < n_agents or int(active_intent.requested_bytes) <= 0:
+                continue
+            power_w = (
+                self._tx_power_w()
+                if active_intent.tx_power_w is None
+                else max(float(active_intent.tx_power_w), 0.0)
+            )
+            active_tx_power_by_sender[sender] = max(
+                active_tx_power_by_sender.get(sender, 0.0), power_w
+            )
+
         outcomes: list[TransmissionOutcome] = []
         attempted = 0
         delivered = 0
@@ -228,8 +245,9 @@ class AnalyticalNetworkBackend:
                 distance = float(np.linalg.norm(positions[sender] - gcs_position))
                 delta = positions[sender] - gcs_position
                 interference = sum(
-                    self._received_power_w(gcs_position, positions[j])
-                    for j in range(len(positions)) if j != sender
+                    self._received_power_w(gcs_position, positions[j], power_w)
+                    for j, power_w in active_tx_power_by_sender.items()
+                    if j != sender
                 )
                 rate = communication_rate_bps(
                     float(np.linalg.norm(delta[:2])), float(delta[2]), self.cfg,
@@ -242,8 +260,9 @@ class AnalyticalNetworkBackend:
                 distance = float(np.linalg.norm(positions[sender] - positions[recipient]))
                 delta = positions[sender] - positions[recipient]
                 interference = sum(
-                    self._received_power_w(positions[recipient], positions[j])
-                    for j in range(len(positions)) if j not in (sender, recipient)
+                    self._received_power_w(positions[recipient], positions[j], power_w)
+                    for j, power_w in active_tx_power_by_sender.items()
+                    if j not in (sender, recipient)
                 )
                 rate = communication_rate_bps(
                     float(np.linalg.norm(delta[:2])), float(delta[2]), self.cfg,
@@ -361,6 +380,11 @@ class _PolicyHopRoutingAdapter:
         self.packet_module = packet_module
         self.config = config_module
 
+    def _finish_packet(self, packet_id: int, *, success: bool) -> None:
+        completion = self.simulator.packet_completion_events.pop(int(packet_id), None)
+        if completion is not None and not completion.triggered:
+            completion.succeed(bool(success))
+
     def penalize(self, packet: Any) -> None:
         self.simulator.event_bus.publish(
             "packet_ack_timeout",
@@ -368,6 +392,15 @@ class _PolicyHopRoutingAdapter:
             packet_id=int(packet.packet_id),
             sender=int(self.my_drone.identifier),
         )
+        attempts = int(packet.number_retransmission_attempt[self.my_drone.identifier])
+        if attempts >= int(self.config.MAX_RETRANSMISSION_ATTEMPT):
+            self.simulator.event_bus.publish(
+                "packet_terminal_drop",
+                self.env.now,
+                packet_id=int(packet.packet_id),
+                sender=int(self.my_drone.identifier),
+            )
+            self._finish_packet(int(packet.packet_id), success=False)
 
     def packet_reception(self, packet: Any, src_drone_id: int):
         DataPacket = self.packet_module.DataPacket
@@ -412,6 +445,7 @@ class _PolicyHopRoutingAdapter:
                 sender=int(self.my_drone.identifier),
                 ack_from=int(src_drone_id),
             )
+            self._finish_packet(int(data_packet.packet_id), success=True)
             wait_process.interrupt()
 
 
@@ -463,8 +497,10 @@ class UavNetSimBackend:
     """Peer transport using UavNetSim's A2A PHY, channel and CSMA/CA implementation.
 
     PaperUAVEnv remains authoritative for mobility, application queues and MARL
-    routing decisions.  This adapter intentionally never calls a UavNetSim
-    routing protocol, so a policy-selected recipient cannot be overwritten.
+    routing decisions. This adapter intentionally never calls a UavNetSim routing
+    protocol, so a policy-selected recipient cannot be overwritten. One simulator
+    instance persists across the episode, while packet admission is closed within
+    each macro-step so every admitted chunk reaches terminal ACK/drop before return.
     """
 
     name = "uavnetsim"
@@ -632,6 +668,7 @@ class UavNetSimBackend:
         simulator.seed = int(self.seed)
         simulator.event_bus = event_bus
         simulator.metrics = metrics
+        simulator.packet_completion_events: dict[int, Any] = {}
         simulator.airspace = _PaperAirspace(obstacles)
         simulator.n_drones = n_agents + 1
         simulator.channel_states = {i: simpy.Resource(env, capacity=1) for i in range(n_agents + 1)}
@@ -851,10 +888,14 @@ class UavNetSimBackend:
         gcs_id = n_agents
         simulator = self._update_episode_geometry(positions, gcs_position, obstacles)
         env = simulator.env
+        event_bus = simulator.event_bus
+        # Closed macro-step transport keeps only current-slot diagnostics. No
+        # admitted packet survives a return, so older events are not needed for
+        # settlement and retaining them would make per-step scans quadratic.
+        event_bus.events.clear()
         if not intents:
             self._advance_episode_time(simulator, dt_s)
             return NetworkStepResult(attempted_bytes=0)
-        event_bus = simulator.event_bus
         metrics = simulator.metrics
         valid_intents: list[TransmissionIntent] = []
         prefailed: list[TransmissionOutcome] = []
@@ -927,7 +968,7 @@ class UavNetSimBackend:
         packets: dict[int, tuple[Any, TransmissionIntent, int, int]] = {}
         packet_chunks_by_intent: dict[tuple[int, int], list[tuple[int, int]]] = {}
         phy_failures_before = int(metrics.phy_failures)
-        event_start = len(event_bus.events)
+        event_start = 0
         with self._with_radio_parameters() as ucfg:
 
             ip_header = int(getattr(ucfg, "IP_HEADER_LENGTH", 0))
@@ -935,15 +976,32 @@ class UavNetSimBackend:
             phy_header = int(getattr(ucfg, "PHY_HEADER_LENGTH", 0))
             header_bits = ip_header + mac_header + phy_header
             slot_us = float(dt_s) * 1e6
-            max_backoff_us = max(0, int(ucfg.CW_MIN) - 1) * float(ucfg.SLOT_DURATION)
-            usable_tx_us = max(0.0, slot_us - float(ucfg.DIFS_DURATION) - max_backoff_us - 1.0)
-            max_payload_bits = max(0, int(float(ucfg.BIT_RATE) * usable_tx_us / 1e6) - header_bits)
+            slot_end_us = float(env.now) + slot_us
+
+            def terminal_service_bound_us(packet_length_bits: int) -> float:
+                """Conservative time for one native packet to ACK or exhaust ARQ."""
+                attempts = max(1, int(ucfg.MAX_RETRANSMISSION_ATTEMPT))
+                max_backoff_total = 0.0
+                for attempt in range(1, attempts + 1):
+                    contention_window = (int(ucfg.CW_MIN) + 1) * (2 ** (attempt - 1)) - 1
+                    max_backoff_total += max(0, contention_window - 1) * float(ucfg.SLOT_DURATION)
+                data_airtime_us = float(packet_length_bits) / max(float(ucfg.BIT_RATE), 1.0) * 1e6
+                ack_airtime_us = float(ucfg.ACK_PACKET_LENGTH) / max(float(ucfg.BIT_RATE), 1.0) * 1e6
+                ack_phase_us = max(
+                    float(ucfg.ACK_TIMEOUT),
+                    float(ucfg.SIFS_DURATION) + ack_airtime_us,
+                )
+                per_attempt_us = float(ucfg.DIFS_DURATION) + data_airtime_us + ack_phase_us
+                return max_backoff_total + attempts * per_attempt_us + 1.0
 
             packet_payload_bytes = max(
                 1,
                 int(self.scenario.get("network_packet_payload_bytes", max(1, int(getattr(ucfg, "AVERAGE_PAYLOAD_LENGTH", 8192)) // 8))),
             )
             intent_meta: dict[tuple[int, int], dict[str, float | int]] = {}
+            intent_by_key: dict[tuple[int, int], TransmissionIntent] = {}
+            native_recipient_by_key: dict[tuple[int, int], int] = {}
+            remaining_by_intent: dict[tuple[int, int], int] = {}
             for intent in valid_intents:
                 sender = int(intent.sender)
                 recipient_raw = int(intent.recipient)
@@ -959,20 +1017,58 @@ class UavNetSimBackend:
                 sinr_db = 10.0 * np.log10(tx_power_w * gain / noise_w) if tx_power_w > 0.0 else -200.0
                 nominal_rate = float(ucfg.BIT_RATE) if sinr_db >= float(ucfg.SINR_THRESHOLD_DB) else 0.0
                 key_meta = (sender, recipient_raw)
+                if key_meta in intent_meta:
+                    raise ValueError(
+                        "UavNetSimBackend accepts at most one intent per sender/recipient in a macro-step"
+                    )
                 intent_meta[key_meta] = {
                     "requested": int(intent.requested_bytes),
                     "distance": distance,
                     "rate": nominal_rate,
                     "tx_power_w": tx_power_w,
                 }
-                packet_chunks_by_intent.setdefault(key_meta, [])
-                remaining = min(int(intent.requested_bytes), max(0, max_payload_bits // 8))
-                while remaining > 0:
+                packet_chunks_by_intent[key_meta] = []
+                intent_by_key[key_meta] = intent
+                native_recipient_by_key[key_meta] = recipient
+                remaining_by_intent[key_meta] = int(intent.requested_bytes)
+
+            # Admit one chunk per active intent in each round. The next chunk for
+            # that intent is not created until native ACK reception or terminal
+            # ARQ failure, which makes every successful application byte a
+            # contiguous prefix. A conservative worst-case guard leaves enough
+            # time for the whole round to settle before this action slot returns.
+            active_keys = list(intent_meta)
+            while active_keys:
+                round_specs: list[tuple[tuple[int, int], int, int]] = []
+                for key_meta in active_keys:
+                    remaining = int(remaining_by_intent[key_meta])
+                    if remaining <= 0:
+                        continue
                     payload_bytes = min(remaining, packet_payload_bytes)
-                    payload_bits = payload_bytes * 8
-                    packet_length = max(1, header_bits + payload_bits)
+                    packet_length = max(1, header_bits + payload_bytes * 8)
+                    round_specs.append((key_meta, payload_bytes, packet_length))
+                if not round_specs:
+                    break
+
+                round_bound_us = sum(
+                    terminal_service_bound_us(packet_length)
+                    for _key, _payload_bytes, packet_length in round_specs
+                )
+                if float(env.now) + round_bound_us > slot_end_us:
+                    break
+
+                round_completions: dict[
+                    tuple[int, int], tuple[Any, int, int]
+                ] = {}
+                for key_meta, payload_bytes, packet_length in round_specs:
+                    intent = intent_by_key[key_meta]
+                    sender = int(intent.sender)
+                    recipient = int(native_recipient_by_key[key_meta])
+                    tx_power_w = float(intent_meta[key_meta]["tx_power_w"])
                     self._packet_sequence += 1
-                    packet_id = int(self._episode_counter * 1_000_000_000 + self._packet_sequence)
+                    packet_id = int(
+                        self._episode_counter * 1_000_000_000 + self._packet_sequence
+                    )
                     packet = DataPacket(
                         src_drone=simulator.drones[sender],
                         dst_drone=simulator.drones[recipient],
@@ -986,18 +1082,59 @@ class UavNetSimBackend:
                     packet.next_hop_id = recipient
                     packet.tx_power_w = tx_power_w
                     packet.number_retransmission_attempt[sender] = 1
+                    completion = env.event()
+                    simulator.packet_completion_events[packet_id] = completion
                     mac_key = f"mac_send{sender}_{packet_id}"
                     simulator.drones[sender].mac_process_finish[mac_key] = 0
-                    proc = env.process(simulator.drones[sender].mac_protocol.mac_send(packet))
+                    proc = env.process(
+                        simulator.drones[sender].mac_protocol.mac_send(packet)
+                    )
                     simulator.drones[sender].mac_process_dict[mac_key] = proc
                     packets[packet_id] = (packet, intent, recipient, payload_bytes)
-                    packet_chunks_by_intent[key_meta].append((packet_id, payload_bytes))
-                    remaining -= payload_bytes
+                    packet_chunks_by_intent[key_meta].append(
+                        (packet_id, payload_bytes)
+                    )
+                    round_completions[key_meta] = (
+                        completion, payload_bytes, packet_id
+                    )
 
-            slot_end_us = float(env.now) + float(dt_s) * 1e6
-            if env.peek() < float("inf"):
-                env.run(until=slot_end_us)
-            else:
+                env.run(
+                    until=env.all_of(
+                        [
+                            completion
+                            for completion, _payload, _packet_id
+                            in round_completions.values()
+                        ]
+                    )
+                )
+                next_active_keys: list[tuple[int, int]] = []
+                for key_meta in active_keys:
+                    completion_and_payload = round_completions.get(key_meta)
+                    if completion_and_payload is None:
+                        continue
+                    completion, payload_bytes, packet_id = completion_and_payload
+                    sender = int(key_meta[0])
+                    node = simulator.drones[sender]
+                    mac_key = f"mac_send{sender}_{packet_id}"
+                    ack_key = f"wait_ack{sender}_{packet_id}"
+                    node.mac_process_dict.pop(mac_key, None)
+                    node.mac_process_finish.pop(mac_key, None)
+                    node.mac_protocol.wait_ack_process_dict.pop(ack_key, None)
+                    node.mac_protocol.wait_ack_process_finish.pop(ack_key, None)
+                    if not bool(completion.value):
+                        # Do not create a hole by admitting later chunks after a
+                        # terminal failure. The next action may retry this prefix.
+                        continue
+                    remaining_by_intent[key_meta] -= int(payload_bytes)
+                    if remaining_by_intent[key_meta] > 0:
+                        next_active_keys.append(key_meta)
+                active_keys = next_active_keys
+
+            if simulator.packet_completion_events:
+                raise RuntimeError(
+                    "closed UavNetSim slot returned with unfinished packet work"
+                )
+            if float(env.now) < slot_end_us:
                 env.run(until=slot_end_us)
 
             # A hop is committed to the application layer only after native
