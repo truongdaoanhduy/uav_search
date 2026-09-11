@@ -27,6 +27,53 @@ class ContinuousSensingProfile:
     pf: float
 
 
+def _belief_codec_parameters(levels: int) -> tuple[int, float, float]:
+    """Return radius, probability floor, and maximum magnitude of log odds."""
+    level_count = int(levels)
+    if level_count != levels or not 3 <= level_count <= 256:
+        raise ValueError("belief quantization levels must be in [3, 256]")
+    radius = (level_count - 1) // 2
+    effective_codes = 2 * radius + 1
+    probability_floor = 0.5 / effective_codes
+    max_log_odds = math.log((1.0 - probability_floor) / probability_floor)
+    return radius, probability_floor, max_log_odds
+
+
+def belief_probability_floor(levels: int) -> float:
+    """Return the closest-to-zero probability representable by the codec."""
+    _, probability_floor, _ = _belief_codec_parameters(levels)
+    return probability_floor
+
+
+def encode_belief_probabilities(probabilities: np.ndarray, levels: int) -> np.ndarray:
+    """Encode probabilities as symmetric one-byte quantized log odds."""
+    radius, probability_floor, max_log_odds = _belief_codec_parameters(levels)
+    values = np.asarray(probabilities, dtype=np.float64)
+    if np.any(~np.isfinite(values)):
+        raise ValueError("belief probabilities must be finite")
+    clipped = np.clip(values, probability_floor, 1.0 - probability_floor)
+    log_odds = np.log(clipped) - np.log1p(-clipped)
+    signed_codes = np.rint(
+        np.clip(log_odds / max_log_odds, -1.0, 1.0) * radius
+    ).astype(np.int16)
+    return (signed_codes + radius).astype(np.uint8)
+
+
+def decode_belief_probabilities(codes: np.ndarray, levels: int) -> np.ndarray:
+    """Decode one-byte log-odds codes without producing endpoint beliefs."""
+    radius, _, max_log_odds = _belief_codec_parameters(levels)
+    raw_codes = np.asarray(codes)
+    if not np.issubdtype(raw_codes.dtype, np.integer):
+        raise TypeError("belief codes must use an integer dtype")
+    integer_codes = raw_codes.astype(np.int64)
+    if np.any((integer_codes < 0) | (integer_codes > 2 * radius)):
+        raise ValueError("belief code is unused or outside the valid range")
+    log_odds = (integer_codes - radius).astype(np.float64) * (
+        max_log_odds / radius
+    )
+    return 1.0 / (1.0 + np.exp(-log_odds))
+
+
 def _validate_profiles(
     levels_m: Sequence[float],
     fov_sizes: Sequence[int],

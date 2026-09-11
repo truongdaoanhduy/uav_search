@@ -11,6 +11,8 @@ from .network_backends import NetworkStepResult, TransmissionIntent, create_netw
 from .sensing import (
     bayes_update,
     binary_entropy,
+    decode_belief_probabilities,
+    encode_belief_probabilities,
     circular_cell_coverage_fraction,
     continuous_fov_cells,
     coverage_weighted_bayes_update,
@@ -190,8 +192,8 @@ class PaperUAVEnv:
                 raise ValueError("report_ttl_s and neighbor_cache_ttl_steps must be positive")
             if self.peer_sync_bytes <= 0:
                 raise ValueError("peer_sync_bytes must be positive")
-            if not 2 <= self.peer_sync_quantization_levels <= 256:
-                raise ValueError("peer_sync_quantization_levels must be in [2, 256]")
+            if not 3 <= self.peer_sync_quantization_levels <= 256:
+                raise ValueError("peer_sync_quantization_levels must be in [3, 256]")
             if self.peer_proximity_sensor_range_m <= 0.0:
                 raise ValueError("proximity_sensor_range_m must be positive")
             # One byte per quantized belief cell plus explicit state, queue,
@@ -1480,10 +1482,10 @@ class PaperUAVEnv:
         self.last_peer_syncs = 0
 
         slot_start = self.report_buffers.copy()
-        quantizer = float(self.peer_sync_quantization_levels - 1)
-        belief_slot_start = np.rint(
-            np.clip(self.belief_maps, 0.0, 1.0) * quantizer
-        ).astype(np.uint8)
+        belief_slot_start = encode_belief_probabilities(
+            self.belief_maps,
+            self.peer_sync_quantization_levels,
+        )
         known_slot_start = self.target_known_by_agent.copy()
         created_known_slot_start = self.report_created_step_known_by_agent.copy()
         progress_known_slot_start = self.report_delivery_progress_known_by_agent.copy()
@@ -1614,7 +1616,10 @@ class PaperUAVEnv:
                     self.neighbor_cache_min_gcs_available[recipient, sender] = min_gcs_available_slot_start[sender]
                     self.neighbor_cache_max_gcs_available[recipient, sender] = max_gcs_available_slot_start[sender]
                     self.neighbor_cache_seen_step[recipient, sender] = self.step_count
-                    decoded_belief = belief_slot_start[sender].astype(np.float64) / quantizer
+                    decoded_belief = decode_belief_probabilities(
+                        belief_slot_start[sender],
+                        self.peer_sync_quantization_levels,
+                    )
                     self._fuse_received_peer_belief(recipient, decoded_belief)
                     self.target_known_by_agent[recipient] |= known_slot_start[sender]
                     for target_idx in range(self.n_targets):

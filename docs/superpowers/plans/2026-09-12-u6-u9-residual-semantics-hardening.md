@@ -20,7 +20,7 @@
 
 ---
 
-## Task 1: Add the endpoint-safe one-byte log-odds belief codec
+## Task 1: Add the endpoint-safe one-byte log-odds belief codec ✅
 
 **Files:**
 

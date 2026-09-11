@@ -7,6 +7,7 @@ import pytest
 
 from uav_search.config import load_config
 from uav_search.envs.paper_env import PaperUAVEnv
+from uav_search.envs.sensing import decode_belief_probabilities, encode_belief_probabilities
 
 
 class FixedRandom:
@@ -349,7 +350,14 @@ def test_peer_sync_fuses_transmitted_quantized_belief_not_float64_oracle() -> No
 
     env._peer_transmit(actions)
 
-    expected = round(0.9 * 255.0) / 255.0
+    code = encode_belief_probabilities(
+        np.array([0.9]),
+        env.peer_sync_quantization_levels,
+    )
+    expected = decode_belief_probabilities(
+        code,
+        env.peer_sync_quantization_levels,
+    )[0]
     assert env.belief_maps[1, y, x] == pytest.approx(expected)
     assert env.belief_maps[1, y, x] != pytest.approx(0.9)
 

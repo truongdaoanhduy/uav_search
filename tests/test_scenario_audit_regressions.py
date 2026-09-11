@@ -14,6 +14,35 @@ from uav_search.envs.network_backends import (
     UavNetSimBackend,
 )
 from uav_search.envs.paper_env import PaperUAVEnv
+from uav_search.envs.sensing import (
+    belief_probability_floor,
+    decode_belief_probabilities,
+    encode_belief_probabilities,
+)
+
+
+def test_belief_codec_preserves_neutrality_and_avoids_absorbing_endpoints() -> None:
+    probabilities = np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype=np.float64)
+
+    encoded = encode_belief_probabilities(probabilities, levels=256)
+    decoded = decode_belief_probabilities(encoded, levels=256)
+
+    assert encoded.dtype == np.uint8
+    assert encoded.nbytes == probabilities.size
+    assert decoded[0] > 0.0
+    assert decoded[2] == 0.5
+    assert decoded[-1] < 1.0
+    assert decoded[0] == pytest.approx(1.0 - decoded[-1])
+    assert decoded[1] == pytest.approx(1.0 - decoded[-2])
+    assert np.all(np.diff(decoded) > 0.0)
+    assert decoded[0] == pytest.approx(belief_probability_floor(256))
+
+
+def test_belief_codec_rejects_invalid_levels_and_unused_even_level_code() -> None:
+    with pytest.raises(ValueError, match=r"\[3, 256\]"):
+        encode_belief_probabilities(np.array([0.5]), levels=2)
+    with pytest.raises(ValueError, match="unused|range"):
+        decode_belief_probabilities(np.array([255], dtype=np.uint8), levels=256)
 
 
 def make_u6_env(*, seed: int = 0) -> PaperUAVEnv:

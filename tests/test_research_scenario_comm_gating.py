@@ -6,6 +6,7 @@ import pytest
 
 from uav_search.config import ACTIVE_SCENARIOS, RESEARCH_SCENARIOS, load_config
 from uav_search.envs.paper_env import PaperUAVEnv
+from uav_search.envs.sensing import decode_belief_probabilities, encode_belief_probabilities
 from uav_search.envs.network_backends import NetworkStepResult, TransmissionOutcome
 
 
@@ -42,8 +43,16 @@ def place_single_good_peer_link(env: PaperUAVEnv) -> None:
 
 
 def quantized_belief(env: PaperUAVEnv, value: float) -> float:
-    q = float(env.peer_sync_quantization_levels - 1)
-    return float(np.rint(np.clip(value, 0.0, 1.0) * q) / q)
+    code = encode_belief_probabilities(
+        np.array([value]),
+        env.peer_sync_quantization_levels,
+    )
+    return float(
+        decode_belief_probabilities(
+            code,
+            env.peer_sync_quantization_levels,
+        )[0]
+    )
 
 
 def test_active_research_scope_is_only_u6_and_u9():
