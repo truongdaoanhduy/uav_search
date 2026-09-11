@@ -8,7 +8,14 @@ from gymnasium.spaces import Box
 
 from .models import circle_collision, communication_rate_bps, multirotor_power_w, path_gain_linear, segment_circle_collision
 from .network_backends import NetworkStepResult, TransmissionIntent, create_network_backend
-from .sensing import bayes_update, binary_entropy, fov_offsets, profile_for_altitude
+from .sensing import (
+    bayes_update,
+    binary_entropy,
+    continuous_fov_offsets,
+    continuous_profile_for_altitude,
+    fov_offsets,
+    profile_for_altitude,
+)
 
 
 GCS_RECIPIENT = -1
@@ -90,6 +97,10 @@ class PaperUAVEnv:
                 self.peer_altitude_levels_m > self.peer_altitude_max_m
             ):
                 raise ValueError("all altitude_levels_m must lie within altitude_min_m/altitude_max_m")
+            self.peer_sensing_model = str(self.scenario.get("sensing_model", "discrete_liu")).strip().lower()
+            if self.peer_sensing_model not in {"discrete_liu", "continuous_hu_liu"}:
+                raise ValueError(f"unsupported scenario.sensing_model: {self.peer_sensing_model}")
+            self.peer_camera_full_fov_deg = float(self.scenario.get("camera_full_fov_deg", 90.0))
             self.peer_sensing_grid_cell_m = float(self.scenario.get("sensing_grid_cell_m", 100.0))
             self.peer_sensing_fov_cells = tuple(int(x) for x in self.scenario.get("sensing_fov_cells", [1, 5, 9]))
             self.peer_sensing_pd = tuple(float(x) for x in self.scenario.get("sensing_detection_probability", [0.9, 0.8, 0.7]))
@@ -104,6 +115,24 @@ class PaperUAVEnv:
                 raise ValueError("sensing_fov_cells must align with altitude_levels_m")
             if len(self.peer_sensing_pd) != len(self.peer_altitude_levels_m) or len(self.peer_sensing_pf) != len(self.peer_altitude_levels_m):
                 raise ValueError("sensing probability profiles must align with altitude_levels_m")
+            if self.peer_sensing_model == "continuous_hu_liu":
+                if self.peer_altitude_min_m < float(self.peer_altitude_levels_m[0]) - 1e-9 or self.peer_altitude_max_m > float(self.peer_altitude_levels_m[-1]) + 1e-9:
+                    raise ValueError("continuous sensing calibration anchors must cover the full operating altitude range")
+                # Validate the continuous geometry and probability anchors eagerly.
+                continuous_profile_for_altitude(
+                    self.peer_altitude_min_m,
+                    self.peer_altitude_levels_m,
+                    self.peer_sensing_pd,
+                    self.peer_sensing_pf,
+                    full_fov_deg=self.peer_camera_full_fov_deg,
+                )
+                continuous_profile_for_altitude(
+                    self.peer_altitude_max_m,
+                    self.peer_altitude_levels_m,
+                    self.peer_sensing_pd,
+                    self.peer_sensing_pf,
+                    full_fov_deg=self.peer_camera_full_fov_deg,
+                )
             if not 0.0 < self.peer_belief_prior < 1.0:
                 raise ValueError("belief_prior must lie strictly between zero and one")
             if not 0.5 < self.peer_target_confirmation_threshold < 1.0:
@@ -614,8 +643,17 @@ class PaperUAVEnv:
     def _sensing_profile(self, agent_idx: int):
         if not self.peer_mode:
             raise RuntimeError("altitude-aware sensing is defined only for homogeneous_peer scenarios")
+        altitude_m = float(self.positions[int(agent_idx), 2])
+        if self.peer_sensing_model == "continuous_hu_liu":
+            return continuous_profile_for_altitude(
+                altitude_m,
+                self.peer_altitude_levels_m,
+                self.peer_sensing_pd,
+                self.peer_sensing_pf,
+                full_fov_deg=self.peer_camera_full_fov_deg,
+            )
         return profile_for_altitude(
-            float(self.positions[int(agent_idx), 2]),
+            altitude_m,
             self.peer_altitude_levels_m,
             self.peer_sensing_fov_cells,
             self.peer_sensing_pd,
@@ -625,8 +663,12 @@ class PaperUAVEnv:
     def _sensing_cells(self, agent_idx: int) -> list[tuple[int, int]]:
         center_y, center_x = self._xy_grid_cell(self.positions[int(agent_idx), :2])
         profile = self._sensing_profile(agent_idx)
+        if self.peer_sensing_model == "continuous_hu_liu":
+            offsets = continuous_fov_offsets(profile.fov_radius_m, self.peer_sensing_grid_cell_m)
+        else:
+            offsets = fov_offsets(profile.fov_cells)
         cells: list[tuple[int, int]] = []
-        for dy, dx in fov_offsets(profile.fov_cells):
+        for dy, dx in offsets:
             y, x = center_y + dy, center_x + dx
             if 0 <= y < self.peer_sensing_grid_n and 0 <= x < self.peer_sensing_grid_n:
                 cells.append((y, x))
@@ -1444,6 +1486,16 @@ class PaperUAVEnv:
         rotor_battery = self.battery_pct[self.multirotor_indices] if self.n_rotor else np.array([100.0])
         if self.peer_mode:
             altitudes = self.positions[:, 2]
+            sensing_profiles = [self._sensing_profile(i) for i in range(self.n_agents)]
+            if self.peer_sensing_model == "continuous_hu_liu":
+                fov_radii = np.asarray([p.fov_radius_m for p in sensing_profiles], dtype=np.float64)
+            else:
+                fov_radii = np.asarray([
+                    max(math.hypot(dx, dy) for dy, dx in fov_offsets(p.fov_cells)) * self.peer_sensing_grid_cell_m
+                    for p in sensing_profiles
+                ], dtype=np.float64)
+            sensing_pd = np.asarray([p.pd for p in sensing_profiles], dtype=np.float64)
+            sensing_pf = np.asarray([p.pf for p in sensing_profiles], dtype=np.float64)
             beliefs = np.clip(self.belief_maps, 0.0, 1.0)
             entropy_terms = np.zeros_like(beliefs, dtype=np.float64)
             interior = (beliefs > 0.0) & (beliefs < 1.0)
@@ -1458,6 +1510,9 @@ class PaperUAVEnv:
                 "mean_altitude_m": float(np.mean(altitudes)),
                 "min_altitude_m": float(np.min(altitudes)),
                 "max_altitude_m": float(np.max(altitudes)),
+                "mean_fov_radius_m": float(np.mean(fov_radii)),
+                "mean_detection_probability": float(np.mean(sensing_pd)),
+                "mean_false_alarm_probability": float(np.mean(sensing_pf)),
                 "mean_belief_entropy": float(np.mean(entropy_terms)),
                 "mean_target_posterior": mean_target_posterior,
                 "scanned_cells_step": int(self.last_scanned_cells_by_agent.sum()),
@@ -1477,6 +1532,9 @@ class PaperUAVEnv:
                 "mean_altitude_m": float(np.mean(self.positions[:, 2])) if self.n_agents else 0.0,
                 "min_altitude_m": float(np.min(self.positions[:, 2])) if self.n_agents else 0.0,
                 "max_altitude_m": float(np.max(self.positions[:, 2])) if self.n_agents else 0.0,
+                "mean_fov_radius_m": 0.0,
+                "mean_detection_probability": 0.0,
+                "mean_false_alarm_probability": 0.0,
                 "mean_belief_entropy": 0.0,
                 "mean_target_posterior": 0.0,
                 "scanned_cells_step": 0,

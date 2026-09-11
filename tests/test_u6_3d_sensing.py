@@ -103,6 +103,30 @@ def test_unsensed_target_distance_is_not_exposed_even_inside_legacy_detect_radiu
     assert env._target_observation_distance(0, 0) == 0.0
 
 
+def test_u6_continuous_sensing_uses_actual_altitude_between_reference_levels():
+    env = make_env(seed=45)
+    env.reset(seed=45)
+    env.positions[0, :2] = [2500.0, 2500.0]
+    env.positions[0, 2] = 75.0
+
+    profile = env._sensing_profile(0)
+
+    assert profile.pd == pytest.approx(0.85)
+    assert profile.pf == pytest.approx(0.15)
+    assert profile.fov_radius_m == pytest.approx(75.0)
+    assert len(env._sensing_cells(0)) == 1
+
+    env.positions[0, 2] = 125.0
+    profile = env._sensing_profile(0)
+    assert profile.pd == pytest.approx(0.75)
+    assert profile.pf == pytest.approx(0.25)
+    assert profile.fov_radius_m == pytest.approx(125.0)
+    assert len(env._sensing_cells(0)) == 5
+
+    env.positions[0, 2] = 150.0
+    assert len(env._sensing_cells(0)) == 9
+
+
 def test_peer_observation_appends_fixed_nine_cell_belief_patch():
     env = make_env(seed=5)
     env.reset(seed=5)
@@ -112,8 +136,7 @@ def test_peer_observation_appends_fixed_nine_cell_belief_patch():
 
     assert env.obs_dim == base_without_patch + 9
     patch = obs["uav_0"][-9:]
-    profile = env._sensing_profile(0)
-    assert np.count_nonzero(patch) == profile.fov_cells
+    assert np.count_nonzero(patch) == len(env._sensing_cells(0))
 
 
 def test_u6_info_exposes_scalar_altitude_and_belief_sensing_diagnostics():
@@ -124,6 +147,9 @@ def test_u6_info_exposes_scalar_altitude_and_belief_sensing_diagnostics():
         "mean_altitude_m",
         "min_altitude_m",
         "max_altitude_m",
+        "mean_fov_radius_m",
+        "mean_detection_probability",
+        "mean_false_alarm_probability",
         "mean_belief_entropy",
         "mean_target_posterior",
         "scanned_cells_step",

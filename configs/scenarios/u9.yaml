@@ -17,10 +17,17 @@ scenario:
   altitude_levels_provenance: "LITERATURE_BACKED_BASELINE:DRONE_DELIVERY_MULTI_FLIGHT_LEVEL_2024"
   altitude_sensing_mapping_provenance: RESEARCH_ADAPTATION
 
-  # Altitude-aware target sensing. Liu et al. (Drones 2024, 8, 378)
-  # explicitly publish low/mid/high FOV sizes 1/5/9, Pd/Pf profiles and
-  # target-probability threshold 0.99. Scaling their 100 m grid density to
-  # this 5 km root-paper map is a project research adaptation.
+  # Continuous altitude-aware target sensing. Hu et al. (Sensors 2014) give
+  # the nadir-camera geometry r_FOV = h*tan(phi), with phi = half the full
+  # camera FoV, but do not publish a numeric phi. We calibrate a fixed 90 deg
+  # full FoV so the 100 m belief grid exactly preserves Liu et al.'s published
+  # 1/5/9-cell footprints at the 50/100/150 m reference altitudes. Pd/Pf are
+  # linearly interpolated between Liu's explicit anchors, preserving those
+  # values exactly while eliminating nearest-level snapping between anchors.
+  sensing_model: continuous_hu_liu
+  sensing_model_provenance: "RESEARCH_ADAPTATION:HU_2014_GEOMETRIC_FOV_PLUS_LIU_2024_SENSOR_ANCHORS"
+  camera_full_fov_deg: 90.0
+  camera_full_fov_provenance: "RESEARCH_CALIBRATION:PRESERVE_LIU_1_5_9_ON_100M_GRID"
   sensing_grid_cell_m: 100.0
   sensing_grid_provenance: RESEARCH_ADAPTATION
   sensing_fov_cells: [1, 5, 9]

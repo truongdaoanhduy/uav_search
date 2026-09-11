@@ -16,6 +16,14 @@ class SensingProfile:
     pf: float
 
 
+@dataclass(frozen=True)
+class ContinuousSensingProfile:
+    altitude_m: float
+    fov_radius_m: float
+    pd: float
+    pf: float
+
+
 def _validate_profiles(
     levels_m: Sequence[float],
     fov_sizes: Sequence[int],
@@ -56,6 +64,104 @@ def profile_for_altitude(
         pd=float(pd_values[idx]),
         pf=float(pf_values[idx]),
     )
+
+
+def _validate_continuous_anchors(
+    levels_m: Sequence[float],
+    pd_values: Sequence[float],
+    pf_values: Sequence[float],
+) -> np.ndarray:
+    n = len(levels_m)
+    if n < 2 or len(pd_values) != n or len(pf_values) != n:
+        raise ValueError("continuous sensing anchors must contain at least two aligned altitude/Pd/Pf values")
+    levels = np.asarray(levels_m, dtype=np.float64)
+    pd = np.asarray(pd_values, dtype=np.float64)
+    pf = np.asarray(pf_values, dtype=np.float64)
+    if np.any(~np.isfinite(levels)) or np.any(np.diff(levels) <= 0.0):
+        raise ValueError("continuous sensing altitude anchors must be finite and strictly increasing")
+    if np.any(~np.isfinite(pd)) or np.any(~np.isfinite(pf)):
+        raise ValueError("continuous sensing probability anchors must be finite")
+    if np.any((pd <= 0.0) | (pd >= 1.0)) or np.any((pf <= 0.0) | (pf >= 1.0)):
+        raise ValueError("Pd and Pf anchors must lie strictly between zero and one")
+    if np.any(pd <= pf):
+        raise ValueError("Pd must exceed Pf at every continuous sensing anchor")
+    if np.any(np.diff(pd) > 1e-12):
+        raise ValueError("Pd anchors must be monotonically non-increasing with altitude")
+    if np.any(np.diff(pf) < -1e-12):
+        raise ValueError("Pf anchors must be monotonically non-decreasing with altitude")
+    return levels
+
+
+def continuous_profile_for_altitude(
+    z_m: float,
+    levels_m: Sequence[float],
+    pd_values: Sequence[float],
+    pf_values: Sequence[float],
+    *,
+    full_fov_deg: float,
+) -> ContinuousSensingProfile:
+    """Return a continuous altitude-aware camera/sensor profile.
+
+    The ground-footprint radius follows Hu et al.'s nadir-camera geometry,
+    ``r = h * tan(FOV/2)``. Detection and false-alarm probabilities are
+    piecewise-linearly interpolated through the configured Liu et al. anchor
+    profiles so the published low/mid/high values are preserved exactly while
+    intermediate altitudes no longer snap to a nearest level.
+    """
+    levels = _validate_continuous_anchors(levels_m, pd_values, pf_values)
+    z = float(z_m)
+    if not math.isfinite(z):
+        raise ValueError("altitude must be finite")
+    if z < float(levels[0]) - 1e-9 or z > float(levels[-1]) + 1e-9:
+        raise ValueError(
+            f"altitude {z} m is outside continuous sensing calibration range "
+            f"[{float(levels[0])}, {float(levels[-1])}] m"
+        )
+    full_fov = float(full_fov_deg)
+    if not math.isfinite(full_fov) or not (0.0 < full_fov < 180.0):
+        raise ValueError("full_fov_deg must lie strictly between 0 and 180 degrees")
+
+    # Clamp tiny floating-point boundary excursions after validating the model
+    # domain, then interpolate exactly through the published anchor values.
+    z_interp = float(np.clip(z, levels[0], levels[-1]))
+    pd = float(np.interp(z_interp, levels, np.asarray(pd_values, dtype=np.float64)))
+    pf = float(np.interp(z_interp, levels, np.asarray(pf_values, dtype=np.float64)))
+    half_angle_rad = math.radians(full_fov * 0.5)
+    radius_m = float(z_interp * math.tan(half_angle_rad))
+    return ContinuousSensingProfile(
+        altitude_m=z_interp,
+        fov_radius_m=radius_m,
+        pd=pd,
+        pf=pf,
+    )
+
+
+def continuous_fov_offsets(
+    fov_radius_m: float, grid_cell_m: float
+) -> tuple[tuple[int, int], ...]:
+    """Rasterize a circular ground FoV using grid-cell center offsets.
+
+    This keeps the physical FoV radius continuous while converting it to the
+    discrete belief grid used by the environment. With a 100 m grid and a 90°
+    full FoV, radii 50/100/150 m reproduce Liu et al.'s 1/5/9-cell anchors.
+    """
+    radius = float(fov_radius_m)
+    cell = float(grid_cell_m)
+    if not math.isfinite(radius) or radius < 0.0:
+        raise ValueError("fov_radius_m must be finite and non-negative")
+    if not math.isfinite(cell) or cell <= 0.0:
+        raise ValueError("grid_cell_m must be finite and positive")
+    max_offset = int(math.ceil(radius / cell))
+    tolerance = max(1e-9, 1e-12 * max(radius, cell))
+    offsets = [
+        (dy, dx)
+        for dy in range(-max_offset, max_offset + 1)
+        for dx in range(-max_offset, max_offset + 1)
+        if math.hypot(dx * cell, dy * cell) <= radius + tolerance
+    ]
+    if (0, 0) not in offsets:
+        offsets.append((0, 0))
+    return tuple(offsets)
 
 
 def fov_offsets(size: int) -> tuple[tuple[int, int], ...]:
