@@ -11,6 +11,7 @@ from .network_backends import NetworkStepResult, TransmissionIntent, create_netw
 from .sensing import (
     bayes_update,
     binary_entropy,
+    belief_probability_floor,
     decode_belief_probabilities,
     encode_belief_probabilities,
     circular_cell_coverage_fraction,
@@ -442,6 +443,9 @@ class PaperUAVEnv:
         self.last_safety_filter_interventions = 0
         self.total_safety_filter_interventions = 0
         self.last_safety_correction_m_by_agent = np.zeros(
+            self.n_agents, dtype=np.float64
+        )
+        self.last_world_constraint_correction_m_by_agent = np.zeros(
             self.n_agents, dtype=np.float64
         )
         self.obstacle_hits = 0
@@ -1028,6 +1032,10 @@ class PaperUAVEnv:
                 self.false_confirmed_cells[y, x] = True
                 self.last_false_confirmations += 1
                 self.total_false_confirmations += 1
+                self.belief_maps[detector, y, x] = belief_probability_floor(
+                    self.peer_sync_quantization_levels
+                )
+                self.fine_positive_cells_by_agent[detector, y, x] = False
                 continue
 
             for target_idx in true_targets:
@@ -1864,8 +1872,13 @@ class PaperUAVEnv:
         delta_d = float(self.assumed["reward_distance_epsilon_m"])
         penalty = 0.0
         if self.peer_mode:
-            correction_m = float(self.last_safety_correction_m_by_agent[idx])
-            penalty -= eta * correction_m / max(float(self.safety_distance_m), delta_d)
+            pair_correction_m = float(self.last_safety_correction_m_by_agent[idx])
+            world_correction_m = float(
+                self.last_world_constraint_correction_m_by_agent[idx]
+            )
+            correction_scale = max(float(self.safety_distance_m), delta_d)
+            penalty -= eta * pair_correction_m / correction_scale
+            penalty -= eta * world_correction_m / correction_scale
         close = 0
         for j in range(self.n_agents):
             if j == idx:
@@ -1959,6 +1972,7 @@ class PaperUAVEnv:
         self.safety_distance_violation_count = 0
         self.last_safety_filter_interventions = 0
         self.last_safety_correction_m_by_agent.fill(0.0)
+        self.last_world_constraint_correction_m_by_agent.fill(0.0)
         self.obstacle_hits = 0
         self.boundary_hits = 0
         previous_positions = self.positions.copy()
@@ -2016,6 +2030,7 @@ class PaperUAVEnv:
                 battery_capacity_j = float(self.assumed["battery_capacity_j"])
                 self.battery_pct[i] = max(0.0, self.battery_pct[i] - 100.0 * e / battery_capacity_j)
 
+        nominal_positions = self.positions.copy()
         before_clip_xy = self.positions[:, :2].copy()
         self.positions[:, :2] = np.clip(self.positions[:, :2], 0.0, self.area_size_m)
         boundary_mask = np.any(np.abs(before_clip_xy - self.positions[:, :2]) > 1e-9, axis=1)
@@ -2048,6 +2063,14 @@ class PaperUAVEnv:
                     self.velocities[i] = 0.0
 
         if self.peer_mode:
+            world_correction_m = np.linalg.norm(
+                self.positions - nominal_positions,
+                axis=1,
+            )
+            world_correction_m[~self.uav_active] = 0.0
+            self.last_world_constraint_correction_m_by_agent[:] = (
+                world_correction_m
+            )
             self._apply_peer_discrete_barrier_shield(previous_positions)
             # Propulsion energy follows the realized shielded motion rather than
             # the nominal unsafe command that was filtered out.
@@ -2133,7 +2156,10 @@ class PaperUAVEnv:
             shared_task_reward = float(
                 self.assumed["search_reward_coeff"]
                 * self.peer_sensing_target_reward_weight
-                * int(self.last_new_targets_by_agent.sum())
+                * (
+                    int(self.last_new_targets_by_agent.sum())
+                    - int(self.last_false_confirmations)
+                )
             )
             shared_communication_reward = float(
                 self.peer_delivery_reward * self.last_reports_delivered_step
@@ -2304,6 +2330,8 @@ class PaperUAVEnv:
             "safety_filter_interventions_total": int(self.total_safety_filter_interventions) if self.peer_mode else 0,
             "safety_filter_correction_m": float(self.last_safety_correction_m_by_agent.sum()) if self.peer_mode else 0.0,
             "max_safety_filter_correction_m": float(self.last_safety_correction_m_by_agent.max()) if self.peer_mode and self.n_agents else 0.0,
+            "world_constraint_correction_m": float(self.last_world_constraint_correction_m_by_agent.sum()) if self.peer_mode else 0.0,
+            "max_world_constraint_correction_m": float(self.last_world_constraint_correction_m_by_agent.max()) if self.peer_mode and self.n_agents else 0.0,
             "obstacle_hits": int(self.obstacle_hits),
             "boundary_hits": int(self.boundary_hits),
             "min_battery_pct": float(np.min(rotor_battery)) if self.n_rotor else 100.0,

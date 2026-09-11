@@ -8,7 +8,11 @@ import pytest
 from uav_search.config import load_config
 from uav_search.envs.network_backends import NetworkStepResult
 from uav_search.envs.paper_env import PaperUAVEnv
-from uav_search.envs.sensing import decode_belief_probabilities, encode_belief_probabilities
+from uav_search.envs.sensing import (
+    belief_probability_floor,
+    decode_belief_probabilities,
+    encode_belief_probabilities,
+)
 
 
 class FixedRandom:
@@ -262,6 +266,89 @@ def test_report_expiry_is_nonterminal_and_penalized_for_team() -> None:
     assert info["termination_reason"] == "running"
     assert env.expired_reports == 1
     assert all(value <= -env.peer_delivery_reward for value in rewards.values())
+
+
+def test_false_confirmation_has_one_symmetric_team_penalty_and_consumes_evidence() -> None:
+    cfg = deepcopy(load_config("masac", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    cfg["scenario"]["energy_cost_per_j"] = 0.0
+    cfg["scenario"]["sensing_cognitive_reward_weight"] = 0.0
+    env = PaperUAVEnv(cfg, seed=87)
+    set_safe_static_geometry(env)
+    env.targets[:] = np.asarray(
+        [[4000.0, 4000.0 - 200.0 * i] for i in range(env.n_targets)],
+        dtype=np.float64,
+    )
+    detector = 0
+    y, x = env._xy_grid_cell(env.positions[detector, :2])
+    env.belief_maps[detector, y, x] = (
+        env.peer_target_confirmation_threshold + 1e-4
+    )
+    env.fine_positive_cells_by_agent[detector, y, x] = True
+    env.rng = FixedRandom(0.0)
+
+    _, rewards, _, _, info = env.step(idle_actions(env))
+
+    expected_penalty = -float(env.assumed["search_reward_coeff"])
+    expected_penalty *= env.peer_sensing_target_reward_weight
+    assert env.confirmed_cells[y, x]
+    assert env.false_confirmed_cells[y, x]
+    assert info["false_confirmations_step"] == 1
+    assert all(value == pytest.approx(expected_penalty) for value in rewards.values())
+    assert env.belief_maps[detector, y, x] == pytest.approx(
+        belief_probability_floor(env.peer_sync_quantization_levels)
+    )
+    assert not env.fine_positive_cells_by_agent[detector, y, x]
+
+    _, repeated_rewards, _, _, repeated_info = env.step(idle_actions(env))
+
+    assert repeated_info["false_confirmations_step"] == 0
+    assert all(value == pytest.approx(0.0) for value in repeated_rewards.values())
+
+
+@pytest.mark.parametrize("constraint", ["boundary", "obstacle"])
+def test_world_constraint_correction_is_separate_and_penalized(constraint: str) -> None:
+    cfg = deepcopy(load_config("masac", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    cfg["scenario"]["energy_cost_per_j"] = 0.0
+    cfg["scenario"]["sensing_cognitive_reward_weight"] = 0.0
+    cfg["scenario"]["sensing_target_reward_weight"] = 0.0
+    constrained = PaperUAVEnv(cfg, seed=88)
+    idle = PaperUAVEnv(cfg, seed=88)
+    for env in (constrained, idle):
+        set_safe_static_geometry(env)
+        env.rng = FixedRandom(0.99)
+        env.obstacles[:, :2] = np.asarray([4900.0, 4900.0])
+        env.obstacles[:, 2] = 1.0
+
+    action = idle_actions(constrained)
+    if constraint == "boundary":
+        for env in (constrained, idle):
+            env.positions[0, 0] = 0.0
+        action["uav_0"] = np.asarray(
+            [1.0, 1.0, 0.0, -1.0, -1.0, -1.0],
+            dtype=np.float32,
+        )
+    else:
+        for env in (constrained, idle):
+            env.positions[0, :2] = np.asarray([100.0, 2500.0])
+            env.obstacles[0] = np.asarray([102.5, 2500.0, 1.0])
+        action["uav_0"] = np.asarray(
+            [1.0, 0.0, 0.0, -1.0, -1.0, -1.0],
+            dtype=np.float32,
+        )
+    for env in (constrained, idle):
+        env._refresh_links()
+
+    _, constrained_rewards, _, _, info = constrained.step(action)
+    _, idle_rewards, _, _, _ = idle.step(idle_actions(idle))
+
+    assert np.allclose(constrained.positions[0], idle.positions[0])
+    assert constrained.last_world_constraint_correction_m_by_agent[0] > 0.0
+    assert constrained.last_safety_correction_m_by_agent[0] == 0.0
+    assert constrained_rewards["uav_0"] < idle_rewards["uav_0"]
+    assert info["world_constraint_correction_m"] > 0.0
+    assert info["max_world_constraint_correction_m"] > 0.0
 
 
 def test_target_confirmation_reward_is_shared_with_all_agents() -> None:

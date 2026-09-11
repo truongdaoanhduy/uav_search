@@ -169,7 +169,7 @@ git add src/uav_search/envs/paper_env.py tests/test_scenario_audit_regressions.p
 git commit -m "fix: enforce peer admission semantics"
 ```
 
-## Task 3: Penalize false confirmation once and expose world-constraint correction
+## Task 3: Penalize false confirmation once and expose world-constraint correction ✅
 
 **Files:**
 
