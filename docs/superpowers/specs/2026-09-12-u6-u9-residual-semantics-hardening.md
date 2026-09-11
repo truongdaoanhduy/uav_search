@@ -1,7 +1,7 @@
 # U6/U9 Residual Scenario Semantics Hardening
 
 **Date:** 2026-09-12  
-**Status:** Design approved in chat; implementation requires review of this written spec.  
+**Status:** Approved by the user on 2026-09-12.
 **Scope:** Homogeneous research scenarios `u6` and `u9` only.
 
 ## Goal
