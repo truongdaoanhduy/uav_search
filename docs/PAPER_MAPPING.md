@@ -79,7 +79,7 @@ The baseline now embeds the two paper type-specific observations into one common
 - target input is only `d_i,k`, visible only within the type's sensing range and zero-masked once found/out of range;
 - obstacle geometry, agent-type flags, and always-visible target coordinates are no longer leaked into the Actor observation because they are not present in Eqs. (17)-(20).
 
-The centralized critic concatenates all agents' padded observations and actions, implementing CTDE. Observation dimension still grows with swarm size for these baseline algorithms; GAT importance ranking/aggregation remains outside baseline scope.
+The centralized critic concatenates all agents' padded observations and actions, implementing CTDE. This is a centralized **joint-observation critic**, not a privileged full simulator-state critic: hidden belief internals, full obstacle maps, and other environment-private variables are not separately injected. Observation dimension still grows with swarm size for these baseline algorithms; GAT importance ranking/aggregation remains outside baseline scope.
 
 ## 6. Rewards — paper Eq. (21)–(27)
 

@@ -165,7 +165,7 @@ These points are intentionally left visible instead of being silently filled wit
 
 ## 8. Homogeneous `u6` research adaptation (not a paper reproduction)
 
-`configs/scenarios/u6.yaml` now deliberately separates the root-paper reproduction from a new homogeneous research scenario. `u6` uses six identical multi-rotors, full 3D motion, altitude-aware Bayesian sensing, a ground command station, persistent DTN buffering, and UavNetSim MAC/PHY execution. The action is six-dimensional: horizontal thrust, heading, vertical acceleration, transmit gate, transmit power, and immediate recipient/next hop.
+`configs/scenarios/u6.yaml` now deliberately separates the root-paper reproduction from a new homogeneous research scenario. `u6` uses six identical multi-rotors, full 3D motion, altitude-aware Bayesian sensing, a ground command station, persistent DTN buffering, and UavNetSim MAC/PHY execution. The action is six-dimensional: horizontal thrust, horizontal-acceleration azimuth, vertical acceleration, transmit gate, transmit power, and immediate recipient/next hop.
 
 The change does **not** retroactively make these elements part of the Ao et al. root paper. Each `u6` subsystem parameter has its own provenance. Strong examples are Liu et al.'s low/mid/high sensing and 0.9/0.8/0.7 detection profiles, Hu et al.'s continuous planar sensing geometry, Du et al.'s 1 MB report and 300 s TTL references, JUROR's DTN lifecycle/team-reward features, UavNetSim's native lower-layer defaults, and published baselines for 50/100/150 m flight levels, 2 km WLAN radius, 0.1--0.4 W transmit power and 77 Wh battery capacity. The active 3 MB buffer is explicitly a workload-coupled project design rather than Du et al.'s 100 MB value.
 

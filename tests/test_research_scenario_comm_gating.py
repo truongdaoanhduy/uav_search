@@ -254,7 +254,10 @@ def test_independent_local_confirmation_updates_agent_knowledge_after_global_con
             return 0.0
 
     env.rng = AlwaysPositive()
-    env._perform_peer_target_detection()
+    for _ in range(20):
+        env._perform_peer_target_detection()
+        if env.belief_maps[1, y, x] >= env.peer_target_confirmation_threshold:
+            break
 
     assert env.belief_maps[1, y, x] >= env.peer_target_confirmation_threshold
     assert env.target_known_by_agent[1, 0]
@@ -279,7 +282,10 @@ def test_independent_detector_can_replace_depleted_pending_report_source():
             return 0.0
 
     env.rng = AlwaysPositive()
-    env._perform_peer_target_detection()
+    for _ in range(20):
+        env._perform_peer_target_detection()
+        if env.target_known_by_agent[1, 0]:
+            break
     assert env.target_known_by_agent[1, 0]
 
     env.uav_active[0] = False

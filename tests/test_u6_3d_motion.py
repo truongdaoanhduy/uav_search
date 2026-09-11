@@ -69,7 +69,7 @@ def test_vertical_motion_is_clipped_to_configured_altitude_bounds():
     assert info["boundary_hits"] >= 1
 
 
-def test_peer_motion_rejects_candidate_that_would_violate_safe_distance():
+def test_peer_motion_barrier_shield_projects_candidate_that_would_violate_safe_distance():
     env = make_u6(seed=93)
     env.reset(seed=93)
     env.obstacles[:, :2] = [4900.0, 4900.0]
@@ -87,13 +87,13 @@ def test_peer_motion_rejects_candidate_that_would_violate_safe_distance():
     env.velocities[1, 0] = -10.0
     before = env.positions.copy()
 
-    env.step(idle_actions(env))
+    _, _, _, _, info = env.step(idle_actions(env))
 
-    np.testing.assert_allclose(env.positions[0], before[0])
-    np.testing.assert_allclose(env.positions[1], before[1])
-    np.testing.assert_allclose(env.velocities[0], 0.0)
-    np.testing.assert_allclose(env.velocities[1], 0.0)
+    assert not np.allclose(env.positions[0], before[0])
+    assert not np.allclose(env.positions[1], before[1])
     assert np.linalg.norm(env.positions[0] - env.positions[1]) >= env.safety_distance_m
+    assert info["safety_filter_interventions"] >= 1
+    assert info["safety_distance_violations"] == 0
 
 
 def test_peer_safety_filter_rechecks_after_pair_rollback():

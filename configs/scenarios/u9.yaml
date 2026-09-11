@@ -53,6 +53,11 @@ scenario:
   uavnetsim_channel_mode_provenance: UAVNETSIM_NATIVE
   uavnetsim_bit_rate_bps: 2000000
   uavnetsim_bit_rate_provenance: UAVNETSIM_NATIVE
+  # Align the reachable maximum positive communication-reward branch with the
+  # backend's native successful-link rate rather than the root paper's 10 Mbps
+  # normalization placeholder, which is unreachable in this UavNetSim profile.
+  communication_reward_rate_bps: 2000000
+  communication_reward_rate_provenance: "RESEARCH_ADAPTATION:UAVNETSIM_NATIVE_BIT_RATE_ALIGNMENT"
   # RF transmit power is deliberately separate from the root paper's P_com=5 W
   # communication-energy term. UavNetSim upstream uses 0.1 W by default.
   uavnetsim_tx_power_w: 0.1
@@ -69,13 +74,19 @@ scenario:
   a2g_eta_los_db: 1.0
   a2g_eta_nlos_db: 20.0
   a2g_model_provenance: "LITERATURE_BACKED_BASELINE:AL_HOURANI_URBAN_A2G"
-  # Fixed one-hop candidate radius. A 2026 heterogeneous maritime unmanned-system
-  # study reports approximately 2 km WLAN range; UavNetSim still resolves PHY/MAC
-  # success inside this geometric candidate radius. Cross-scenario calibration remains required.
+  # Reference-power one-hop envelope. A 2026 heterogeneous maritime unmanned-system
+  # study reports approximately 2 km WLAN range. Here 2 km is interpreted at the
+  # 0.1 W reference power; runtime reach scales with P_tx^(1/n) before native PHY/MAC.
+  # Cross-scenario calibration remains required.
   peer_contact_range_m: 2000.0
   gcs_contact_range_m: 2000.0
   contact_range_provenance: "LITERATURE_BACKED_BASELINE:ENERGY_INFORMATION_DECISION_2026_2KM_WLAN"
-  contact_range_calibration_status: "RECALIBRATION_REQUIRED:POST_A2G_POWER_AWARE_HARDENING"
+  contact_range_calibration_status: "RECALIBRATION_REQUIRED:POWER_SCALED_ENVELOPE"
+  # Treat 2 km as the reference-power candidate envelope. The pinned UavNetSim
+  # A2A urban NLoS model uses path-loss exponent n=3.0; use that native exponent
+  # for d_max ~ P_tx^(1/n), then let native PHY/MAC decide actual delivery.
+  contact_range_path_loss_exponent: 3.0
+  contact_range_power_scaling_provenance: "UAVNETSIM_NATIVE:NLOS_A2A_URBAN_PATH_LOSS_EXPONENT;RESEARCH_ADAPTATION:REFERENCE_ENVELOPE_SCALING"
   tx_power_min_w: 0.1
   tx_power_max_w: 0.4
   tx_power_reference_w: 0.1
@@ -118,6 +129,8 @@ scenario:
   launch_radius_provenance: RESEARCH_DESIGN_DERIVED_SAFE_PAD_GEOMETRY
   safety_distance_m: 141.4
   safety_distance_provenance: "LITERATURE_BACKED_BASELINE:LIU_2024_SAFE_DISTANCE_141_4M"
+  safety_filter: discrete_time_cbf_style_projection
+  safety_filter_provenance: "LITERATURE_BACKED_CONCEPT:CBF_SAFE_RL_MULTI_UAV;RESEARCH_ADAPTATION:NO_QP_DEPENDENCY"
   initial_min_separation_m: 141.4
   initial_min_separation_provenance: "RESEARCH_ADAPTATION:LIU_2024_SAFE_DISTANCE_141_4M"
   initialization_provenance: "LITERATURE_BACKED_BASELINE:GLIDE_2024_COMMON_BASE"
@@ -137,8 +150,11 @@ scenario:
   delivery_reward_provenance: RESEARCH_DESIGN_CALIBRATION_REQUIRED
   expiry_penalty: 20.0
   expiry_penalty_provenance: "RESEARCH_DESIGN:SYMMETRIC_WITH_DELIVERY_REWARD"
+  # TTL expiry purges the current report generation/copies and incurs expiry
+  # penalty; it is not mission-terminal. Independent fine evidence can regenerate
+  # a fresh report, which receives a new TTL at creation.
   report_ttl_s: 300.0
-  report_ttl_provenance: "LITERATURE_BACKED_BASELINE:DU_2021_UAV_ASSISTED_VDTN_300S_TTL"
+  report_ttl_provenance: "LITERATURE_BACKED_BASELINE:DU_2021_UAV_ASSISTED_VDTN_300S_TTL;LIFECYCLE_RESEARCH_ADAPTATION:JUROR_MESSAGE_LEVEL_EXPIRY"
   # DJI Mavic 3 Enterprise is a close small-multirotor hardware reference; published
   # smart-sensing work reports a 77 Wh battery, i.e. 277.2 kJ.
   battery_capacity_j: 277200.0

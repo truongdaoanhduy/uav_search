@@ -196,7 +196,7 @@ def test_uavnetsim_idle_macro_step_advances_persistent_clock_when_dependency_ava
     assert backend.simulation_time_s == pytest.approx(1.0)
 
 
-def test_uavnetsim_reference_contact_range_matches_reference_power_transmission_when_dependency_available():
+def test_uavnetsim_power_scaled_envelope_preserves_reference_range_and_allows_high_power_extension_when_dependency_available():
     import importlib.util
 
     if importlib.util.find_spec("simpy") is None or importlib.util.find_spec("phy.channel") is None:
@@ -224,4 +224,4 @@ def test_uavnetsim_reference_contact_range_matches_reference_power_transmission_
     )
 
     assert low.delivered_bytes == 0
-    assert high.delivered_bytes == 0
+    assert high.delivered_bytes > 0

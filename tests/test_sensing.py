@@ -83,3 +83,49 @@ def test_binary_entropy_is_stable_at_probability_limits_and_maximal_at_half():
     assert binary_entropy(0.0) == 0.0
     assert binary_entropy(1.0) == 0.0
     assert math.isclose(binary_entropy(0.5), 1.0, rel_tol=0.0, abs_tol=1e-12)
+
+
+def test_circle_cell_coverage_fraction_handles_partial_footprint_without_full_cell_oracle():
+    center = np.asarray([50.0, 50.0])
+    fraction = sensing.circular_cell_coverage_fraction(
+        center_xy=center,
+        fov_radius_m=50.0,
+        grid_cell_m=100.0,
+        cell_y=0,
+        cell_x=0,
+    )
+    tangent_neighbor = sensing.circular_cell_coverage_fraction(
+        center_xy=center,
+        fov_radius_m=50.0,
+        grid_cell_m=100.0,
+        cell_y=0,
+        cell_x=1,
+    )
+
+    assert fraction == pytest.approx(math.pi / 4.0, rel=2e-6)
+    assert tangent_neighbor == pytest.approx(0.0, abs=1e-9)
+
+
+def test_coverage_weighted_bayes_update_scales_log_likelihood_evidence():
+    prior = 0.5
+    full = bayes_update(prior, True, 0.9, 0.1)
+    partial = sensing.coverage_weighted_bayes_update(
+        prior, True, 0.9, 0.1, coverage_fraction=0.25
+    )
+
+    expected_odds = (0.9 / 0.1) ** 0.25
+    expected = expected_odds / (1.0 + expected_odds)
+    assert partial == pytest.approx(expected)
+    assert prior < partial < full
+
+
+def test_fractional_bayes_evidence_is_reversible_for_complementary_sensor_outcomes():
+    prior = 0.5
+    after_positive = sensing.coverage_weighted_bayes_update(
+        prior, True, 0.9, 0.1, coverage_fraction=0.25
+    )
+    after_negative = sensing.coverage_weighted_bayes_update(
+        after_positive, False, 0.9, 0.1, coverage_fraction=0.25
+    )
+
+    assert after_negative == pytest.approx(prior, abs=1e-12)

@@ -1,5 +1,7 @@
 # U6/U9 Scenario Semantics Hardening Design
 
+
+**Superseded note (2026-09-11, later hardening):** this document records the earlier implementation checkpoint. Current runtime truth is in `README.md` and `docs/U6_PROVENANCE.md`. Later hardening changed four details without changing MASAC/MATD3/MADDPG: continuous sensing now uses a 5×5 maximum-footprint actor crop with partial-cell log-odds evidence; 2 km is a 0.1 W reference-power envelope rather than a power-independent hard radius; report TTL expiry is message-generation loss/penalty rather than mission-terminal; and inter-UAV safety uses a discrete-time CBF-style projection shield with explicit intervention metrics.
 **Date:** 2026-09-11
 **Scope:** Homogeneous peer scenarios `u6` and `u9` only. Keep MASAC, MADDPG, and MATD3 implementations and the six-dimensional action contract unchanged.
 

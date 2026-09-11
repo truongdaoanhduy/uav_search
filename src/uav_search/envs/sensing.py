@@ -7,6 +7,9 @@ from typing import Sequence
 import numpy as np
 
 
+_COVERAGE_GAUSS_NODES, _COVERAGE_GAUSS_WEIGHTS = np.polynomial.legendre.leggauss(32)
+
+
 @dataclass(frozen=True)
 class SensingProfile:
     level_index: int
@@ -209,6 +212,114 @@ def continuous_fov_cells(
             if (radius <= tolerance and distance <= tolerance) or distance < radius - tolerance:
                 cells.append((y, x))
     return tuple(cells)
+
+
+def circular_cell_coverage_fraction(
+    center_xy: np.ndarray,
+    fov_radius_m: float,
+    grid_cell_m: float,
+    cell_y: int,
+    cell_x: int,
+) -> float:
+    """Return the fraction of one square grid cell covered by a circular FOV.
+
+    The fast paths are exact for disjoint/full-cell/circle-inside-cell cases.  The
+    remaining circle-square intersection is integrated deterministically with
+    Gauss-Legendre quadrature.  This avoids treating a tiny positive-area overlap
+    as a full-cell observation when the sensing grid is coarse relative to the
+    camera footprint.
+    """
+    center = np.asarray(center_xy, dtype=np.float64)
+    radius = float(fov_radius_m)
+    cell = float(grid_cell_m)
+    if center.shape != (2,) or np.any(~np.isfinite(center)):
+        raise ValueError("center_xy must contain two finite coordinates")
+    if not math.isfinite(radius) or radius < 0.0:
+        raise ValueError("fov_radius_m must be finite and non-negative")
+    if not math.isfinite(cell) or cell <= 0.0:
+        raise ValueError("grid_cell_m must be finite and positive")
+    y0, y1 = int(cell_y) * cell, (int(cell_y) + 1) * cell
+    x0, x1 = int(cell_x) * cell, (int(cell_x) + 1) * cell
+    if radius <= 0.0:
+        return 0.0
+
+    closest_x = float(np.clip(center[0], x0, x1))
+    closest_y = float(np.clip(center[1], y0, y1))
+    nearest = math.hypot(center[0] - closest_x, center[1] - closest_y)
+    if nearest >= radius - 1e-12:
+        return 0.0
+
+    farthest = max(
+        math.hypot(center[0] - x, center[1] - y)
+        for x in (x0, x1)
+        for y in (y0, y1)
+    )
+    if farthest <= radius + 1e-12:
+        return 1.0
+
+    # Circle fully contained in this cell: exact area is available cheaply.
+    if (
+        center[0] - radius >= x0 - 1e-12
+        and center[0] + radius <= x1 + 1e-12
+        and center[1] - radius >= y0 - 1e-12
+        and center[1] + radius <= y1 + 1e-12
+    ):
+        return float(np.clip(math.pi * radius * radius / (cell * cell), 0.0, 1.0))
+
+    xa = max(x0, float(center[0] - radius))
+    xb = min(x1, float(center[0] + radius))
+    if xb <= xa:
+        return 0.0
+    # Deterministic high-order quadrature is accurate enough for the simulator
+    # while avoiding a new SciPy dependency in the environment hot path.
+    nodes, weights = _COVERAGE_GAUSS_NODES, _COVERAGE_GAUSS_WEIGHTS
+    xs = 0.5 * (xb - xa) * nodes + 0.5 * (xa + xb)
+    half_height = np.sqrt(np.maximum(0.0, radius * radius - (xs - center[0]) ** 2))
+    lower = np.maximum(y0, center[1] - half_height)
+    upper = np.minimum(y1, center[1] + half_height)
+    vertical_overlap = np.maximum(0.0, upper - lower)
+    area = 0.5 * (xb - xa) * float(np.dot(weights, vertical_overlap))
+    return float(np.clip(area / (cell * cell), 0.0, 1.0))
+
+
+def coverage_weighted_bayes_update(
+    prior: float,
+    measurement: bool,
+    pd: float,
+    pf: float,
+    *,
+    coverage_fraction: float,
+) -> float:
+    """Apply a Bayesian cell update in proportion to physically observed area.
+
+    Liu-style Bayes updating assumes a sensed grid cell.  When a continuous
+    circular footprint covers only part of a coarse cell, applying the full update
+    overstates evidence.  Interpolating between the prior and full-cell posterior
+    makes zero overlap uninformative and full coverage recover the published rule.
+    """
+    fraction = float(np.clip(coverage_fraction, 0.0, 1.0))
+    p = float(np.clip(prior, 0.0, 1.0))
+    if fraction <= 0.0:
+        return p
+    # Fractional observations are most naturally represented as fractional
+    # likelihood evidence: posterior_odds = prior_odds * LR**coverage.  This
+    # avoids over-confident full-cell updates and preserves reversibility for
+    # complementary positive/negative measurements.
+    eps = 1e-12
+    p_safe = float(np.clip(p, eps, 1.0 - eps))
+    if measurement:
+        likelihood_ratio = float(pd) / max(float(pf), eps)
+    else:
+        likelihood_ratio = (1.0 - float(pd)) / max(1.0 - float(pf), eps)
+    prior_log_odds = math.log(p_safe / (1.0 - p_safe))
+    posterior_log_odds = prior_log_odds + fraction * math.log(max(likelihood_ratio, eps))
+    if posterior_log_odds >= 0.0:
+        exp_neg = math.exp(-posterior_log_odds)
+        posterior = 1.0 / (1.0 + exp_neg)
+    else:
+        exp_pos = math.exp(posterior_log_odds)
+        posterior = exp_pos / (1.0 + exp_pos)
+    return float(np.clip(posterior, 0.0, 1.0))
 
 
 def fov_offsets(size: int) -> tuple[tuple[int, int], ...]:

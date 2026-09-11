@@ -1,5 +1,7 @@
 # U6/U9 Scenario Semantics Hardening Implementation Plan
 
+
+**Superseded note (2026-09-11, later hardening):** this document records the earlier implementation checkpoint. Current runtime truth is in `README.md` and `docs/U6_PROVENANCE.md`. Later hardening changed four details without changing MASAC/MATD3/MADDPG: continuous sensing now uses a 5×5 maximum-footprint actor crop with partial-cell log-odds evidence; 2 km is a 0.1 W reference-power envelope rather than a power-independent hard radius; report TTL expiry is message-generation loss/penalty rather than mission-terminal; and inter-UAV safety uses a discrete-time CBF-style projection shield with explicit intervention metrics.
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Correct every verified U6/U9 environment-flow defect without changing the MASAC, MADDPG, or MATD3 algorithm implementations.

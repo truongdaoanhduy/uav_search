@@ -129,15 +129,16 @@ def test_u6_continuous_sensing_uses_actual_altitude_between_reference_levels():
     assert len(env._sensing_cells(0)) == 16
 
 
-def test_peer_observation_appends_fixed_nine_cell_belief_patch():
+def test_peer_observation_appends_fixed_maximum_footprint_belief_patch():
     env = make_env(seed=5)
     env.reset(seed=5)
     env.positions[0, :2] = [2500.0, 2500.0]
     obs = env._observations()
 
     assert obs["uav_0"].shape == (env.obs_dim,)
-    patch = obs["uav_0"][-9:]
-    assert patch.shape == (9,)
+    patch = obs["uav_0"][-env.peer_belief_patch_dim:]
+    assert patch.shape == (env.peer_belief_patch_dim,)
+    assert env.peer_belief_patch_dim == 25
     assert np.all((patch >= 0.0) & (patch <= 1.0))
 
 

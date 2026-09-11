@@ -192,7 +192,7 @@ def test_u6_flight_energy_excludes_root_paper_constant_pcom_to_avoid_double_coun
     assert env.last_energy_by_agent_j[0] == pytest.approx(float(env.assumed["hover_power_w"]) * env.dt)
 
 
-def test_higher_tx_power_does_not_extend_fixed_contact_radius():
+def test_higher_tx_power_extends_reference_power_contact_envelope():
     from uav_search.envs.network_backends import TransmissionIntent, create_network_backend
 
     cfg = deepcopy(load_config("masac", "u6"))
@@ -218,8 +218,8 @@ def test_higher_tx_power_does_not_extend_fixed_contact_radius():
         dt_s=1.0, step_index=1,
     )
     assert low.delivered_bytes == 0
-    assert high.delivered_bytes == 0
-    assert high.tx_energy_j == 0.0
+    assert high.delivered_bytes > 0
+    assert high.tx_energy_j > 0.0
 
 
 def test_tx_power_slot_no_longer_controls_byte_fraction():

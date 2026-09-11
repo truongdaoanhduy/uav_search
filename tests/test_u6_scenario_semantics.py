@@ -196,7 +196,7 @@ def test_failed_report_attempt_receives_communication_penalty() -> None:
     )
 
 
-def test_irrecoverable_report_expiry_is_terminal_and_penalized_for_team() -> None:
+def test_report_expiry_is_nonterminal_and_penalized_for_team() -> None:
     cfg = deepcopy(load_config("masac", "u6"))
     cfg["scenario"]["network_backend"] = "analytical"
     cfg["scenario"]["report_ttl_s"] = 1.0
@@ -210,9 +210,10 @@ def test_irrecoverable_report_expiry_is_terminal_and_penalized_for_team() -> Non
 
     _, rewards, terminated, truncated, info = env.step(idle_actions(env))
 
-    assert all(terminated.values())
+    assert not any(terminated.values())
     assert not any(truncated.values())
-    assert info["termination_reason"] == "report_expired"
+    assert info["termination_reason"] == "running"
+    assert env.expired_reports == 1
     assert all(value <= -env.peer_delivery_reward for value in rewards.values())
 
 

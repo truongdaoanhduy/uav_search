@@ -90,14 +90,23 @@ class AnalyticalNetworkBackend:
         )
 
     def _effective_contact_range_m(self, tx_power_w: float, *, gcs: bool = False) -> float:
-        """Return the fixed scenario contact radius; RF power affects PHY only.
+        """Scale the reference contact envelope with RF power.
 
-        ``tx_power_w`` is intentionally ignored here.  The u6 contact radius is a
-        calibrated neighbor-candidate constraint, while transmit power remains an
-        independent physical-layer control passed to the channel/rate model.
+        The configured contact radius is interpreted at ``tx_power_reference_w``.
+        A log-distance link-budget approximation gives d_max proportional to
+        P_tx**(1/n), where n is the configured path-loss exponent.  PHY/rate checks
+        still decide whether a candidate link is actually usable.
         """
-        del tx_power_w
-        return self._contact_range_m(gcs=gcs)
+        base = self._contact_range_m(gcs=gcs)
+        if not np.isfinite(base):
+            return base
+        power = max(float(tx_power_w), 0.0)
+        if power <= 0.0:
+            return 0.0
+        reference = max(float(self.scenario.get("tx_power_reference_w", self._tx_power_w())), 1e-12)
+        range_power = max(power, float(self.scenario.get("tx_power_min_w", reference)))
+        exponent = max(float(self.scenario.get("contact_range_path_loss_exponent", 3.0)), 1e-6)
+        return float(base * (range_power / reference) ** (1.0 / exponent))
 
     def _received_power_w(
         self,
@@ -138,7 +147,7 @@ class AnalyticalNetworkBackend:
                 if receiver == transmitter:
                     continue
                 distance = float(np.linalg.norm(positions[transmitter] - positions[receiver]))
-                if distance > self._contact_range_m(gcs=False):
+                if distance > self._effective_contact_range_m(snapshot_power_w, gcs=False):
                     continue
                 interference = 0.0
                 for interferer in range(n_agents):
@@ -161,7 +170,7 @@ class AnalyticalNetworkBackend:
                     adjacency[receiver, transmitter] = 1
 
         for transmitter in range(n_agents):
-            if float(np.linalg.norm(positions[transmitter] - gcs_position)) > self._contact_range_m(gcs=True):
+            if float(np.linalg.norm(positions[transmitter] - gcs_position)) > self._effective_contact_range_m(snapshot_power_w, gcs=True):
                 gcs_rates[transmitter] = 0.0
                 continue
             interference = sum(
@@ -497,9 +506,20 @@ class UavNetSimBackend:
         return float(self._setting(key, float("inf")))
 
     def _effective_contact_range_m(self, tx_power_w: float, *, gcs: bool = False) -> float:
-        """Return fixed candidate radius; native UavNetSim resolves PHY success."""
-        del tx_power_w
-        return self._contact_range_m(gcs=gcs)
+        """Return a power-aware candidate envelope; native UavNetSim resolves PHY success."""
+        base = self._contact_range_m(gcs=gcs)
+        if not np.isfinite(base):
+            return base
+        power = max(float(tx_power_w), 0.0)
+        if power <= 0.0:
+            return 0.0
+        reference = max(
+            float(self.scenario.get("tx_power_reference_w", self._setting("uavnetsim_tx_power_w", 0.1))),
+            1e-12,
+        )
+        range_power = max(power, float(self.scenario.get("tx_power_min_w", reference)))
+        exponent = max(float(self.scenario.get("contact_range_path_loss_exponent", 3.0)), 1e-6)
+        return float(base * (range_power / reference) ** (1.0 / exponent))
 
     @staticmethod
     def _advance_episode_time(simulator: Any, dt_s: float) -> None:
@@ -778,7 +798,10 @@ class UavNetSimBackend:
             for transmitter in range(n_agents):
                 if receiver == transmitter:
                     continue
-                if float(np.linalg.norm(positions[transmitter] - positions[receiver])) > self._contact_range_m(gcs=False):
+                if float(np.linalg.norm(positions[transmitter] - positions[receiver])) > self._effective_contact_range_m(
+                    float(self._radio_parameters()["TRANSMITTING_POWER"]) if tx_power_w is None else float(tx_power_w),
+                    gcs=False,
+                ):
                     continue
                 rate = self._rate(
                     positions[transmitter], positions[receiver], airspace, tx_power_w=tx_power_w
@@ -787,7 +810,8 @@ class UavNetSimBackend:
                 if rate > rmin:
                     adjacency[receiver, transmitter] = 1
         for transmitter in range(n_agents):
-            if float(np.linalg.norm(positions[transmitter] - gcs_position)) <= self._contact_range_m(gcs=True):
+            snapshot_power = float(self._radio_parameters()["TRANSMITTING_POWER"]) if tx_power_w is None else float(tx_power_w)
+            if float(np.linalg.norm(positions[transmitter] - gcs_position)) <= self._effective_contact_range_m(snapshot_power, gcs=True):
                 gcs_rates[transmitter] = self._rate(
                     positions[transmitter], gcs_position, airspace, gcs=True, tx_power_w=tx_power_w
                 )
