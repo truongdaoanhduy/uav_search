@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from uav_search.config import load_config
+from uav_search.envs.network_backends import NetworkStepResult
 from uav_search.envs.paper_env import PaperUAVEnv
 from uav_search.envs.sensing import decode_belief_probabilities, encode_belief_probabilities
 
@@ -179,6 +180,51 @@ def test_report_scheduler_sends_oldest_deadline_before_target_index() -> None:
 
     assert env.report_buffers[9, 0] < before_nine
     assert env.report_buffers[0, 0] == before_zero
+
+
+def test_depleted_recipient_is_recorded_as_failed_attempt_without_rf_energy(monkeypatch) -> None:
+    env = make_env(seed=86)
+    assert env._enqueue_report(0, 0)
+    env.uav_active[1] = False
+    captured_intents = []
+
+    def no_network_work(intents, *_args, **_kwargs):
+        captured_intents.extend(intents)
+        return NetworkStepResult()
+
+    monkeypatch.setattr(env.network_backend, "transmit", no_network_work)
+    actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
+    actions[:, 0] = -1.0
+    actions[:, 3] = -1.0
+    actions[:, 4] = -1.0
+    actions[:, 5] = -1.0
+    actions[0, 3] = 1.0
+    actions[0, 4] = 1.0
+    actions[0, 5] = recipient_code(env, 0, 1)
+
+    env._peer_transmit(actions)
+
+    nominal_slot_bytes = int(
+        float(env.scenario["uavnetsim_bit_rate_bps"]) * env.dt / 8.0
+    )
+    expected_report_attempt = min(
+        env.peer_report_bytes,
+        nominal_slot_bytes - env.peer_sync_bytes,
+    )
+    assert captured_intents == []
+    assert env.last_tx_active[0]
+    assert not env.last_tx_success[0]
+    assert env.last_selected_recipient[0] == 1
+    assert env.last_report_bytes_attempted_by_agent[0] == expected_report_attempt
+    assert env.last_network_result.tx_energy_j == 0.0
+    expected_reward = -float(env.assumed["comm_reward_max"])
+    expected_reward -= env.peer_communication_attempt_penalty
+    assert env._communication_reward(0) == pytest.approx(expected_reward)
+
+    actions[0, 3] = -1.0
+    env._peer_transmit(actions)
+    assert not env.last_tx_active[0]
+    assert env._communication_reward(0) == 0.0
 
 
 def test_failed_report_attempt_receives_communication_penalty() -> None:

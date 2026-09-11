@@ -10,7 +10,9 @@ from uav_search.config import load_config
 from uav_search.envs.network_backends import (
     GCS_NODE,
     AnalyticalNetworkBackend,
+    NetworkStepResult,
     TransmissionIntent,
+    TransmissionOutcome,
     UavNetSimBackend,
 )
 from uav_search.envs.paper_env import PaperUAVEnv
@@ -45,11 +47,71 @@ def test_belief_codec_rejects_invalid_levels_and_unused_even_level_code() -> Non
         decode_belief_probabilities(np.array([255], dtype=np.uint8), levels=256)
 
 
+def recipient_code(env: PaperUAVEnv, sender: int, recipient: int) -> float:
+    candidates = [idx for idx in range(env.n_agents) if idx != sender] + [GCS_NODE]
+    bin_index = candidates.index(recipient)
+    return 2.0 * ((bin_index + 0.5) / len(candidates)) - 1.0
+
+
 def make_u6_env(*, seed: int = 0) -> PaperUAVEnv:
     cfg = deepcopy(load_config("masac", "u6"))
     env = PaperUAVEnv(cfg, seed=seed)
     env.reset(seed=seed)
     return env
+
+
+def test_peer_fan_in_reserves_receiver_report_capacity_once_per_slot(monkeypatch) -> None:
+    env = make_u6_env(seed=906)
+    assert env._enqueue_report(0, 0)
+    assert env._enqueue_report(1, 1)
+    receiver = 2
+    free_bytes = 1_000
+    occupied = env.peer_buffer_bytes - free_bytes
+    env.report_buffers[2, receiver] = occupied
+    env.queue_bytes[receiver] = occupied
+    captured_intents: list[TransmissionIntent] = []
+
+    def full_ack(intents, *_args, **_kwargs):
+        captured_intents.extend(intents)
+        outcomes = [
+            TransmissionOutcome(
+                sender=intent.sender,
+                recipient=intent.recipient,
+                requested_bytes=intent.requested_bytes,
+                delivered_bytes=intent.requested_bytes,
+                rate_bps=2_000_000.0,
+                distance_m=100.0,
+                delivered_prefix_bytes=intent.requested_bytes,
+            )
+            for intent in intents
+        ]
+        attempted = sum(intent.requested_bytes for intent in intents)
+        return NetworkStepResult(
+            outcomes=outcomes,
+            attempted_bytes=attempted,
+            delivered_bytes=attempted,
+            byte_pdr=1.0,
+        )
+
+    monkeypatch.setattr(env.network_backend, "transmit", full_ack)
+    actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
+    actions[:, 0] = -1.0
+    actions[:, 3] = -1.0
+    actions[:, 4] = -1.0
+    actions[:, 5] = -1.0
+    for sender in (0, 1):
+        actions[sender, 3] = 1.0
+        actions[sender, 4] = 1.0
+        actions[sender, 5] = recipient_code(env, sender, receiver)
+
+    env._peer_transmit(actions)
+
+    admitted_report_bytes = sum(
+        intent.requested_bytes - env.peer_sync_bytes for intent in captured_intents
+    )
+    assert admitted_report_bytes == free_bytes
+    assert env.queue_bytes[receiver] == env.peer_buffer_bytes
+    assert env.last_peer_syncs == 2
 
 
 def test_initial_confirmation_accepts_accumulated_posterior_and_direct_fine_evidence() -> None:

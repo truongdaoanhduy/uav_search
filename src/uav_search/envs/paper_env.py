@@ -1482,6 +1482,7 @@ class PaperUAVEnv:
         self.last_peer_syncs = 0
 
         slot_start = self.report_buffers.copy()
+        queue_bytes_slot_start = self.queue_bytes.copy()
         belief_slot_start = encode_belief_probabilities(
             self.belief_maps,
             self.peer_sync_quantization_levels,
@@ -1516,6 +1517,7 @@ class PaperUAVEnv:
         intents: list[TransmissionIntent] = []
         nominal_rate_bps = float(self.scenario.get("uavnetsim_bit_rate_bps", self.assumed["comm_rate_max_bps"]))
         nominal_slot_bytes = max(0, int(nominal_rate_bps * self.dt / 8.0))
+        reserved_report_bytes_by_receiver = np.zeros(self.n_agents, dtype=np.int64)
 
         for sender in range(self.n_agents):
             if not self.uav_active[sender] or act[sender, 3] <= 0.0:
@@ -1536,18 +1538,46 @@ class PaperUAVEnv:
                 rate = float(self.last_gcs_rates_bps[sender])
                 distance_m = float(np.linalg.norm(self.positions[sender] - self.gcs_position))
             else:
-                if recipient < 0 or recipient >= self.n_agents or not self.uav_active[recipient]:
-                    continue
-                rate = float(self.last_pair_rates_bps[recipient, sender])
-                distance_m = float(np.linalg.norm(self.positions[sender] - self.positions[recipient]))
-                receiver_room = max(0, self.peer_buffer_bytes - int(self.queue_bytes[recipient]))
-                report_budget = min(
+                desired_report_bytes = min(
                     max(0, nominal_slot_bytes - self.peer_sync_bytes),
                     queued_at_start,
-                    receiver_room,
                 )
-                requested = self.peer_sync_bytes + report_budget
-                report_requested = report_budget
+                if 0 <= recipient < self.n_agents:
+                    rate = float(self.last_pair_rates_bps[recipient, sender])
+                    distance_m = float(
+                        np.linalg.norm(self.positions[sender] - self.positions[recipient])
+                    )
+                else:
+                    rate = 0.0
+                    distance_m = float("inf")
+
+                # A gate-on choice is actor-visible even when the selected peer has
+                # depleted. It creates no network work or artificial radio energy,
+                # but the existing attempt/failure costs can now train against it.
+                self.last_tx_active[sender] = True
+                self.last_selected_recipient[sender] = int(recipient)
+                self.last_report_bytes_attempted_by_agent[sender] = int(
+                    desired_report_bytes
+                )
+                self.last_selected_tx_power_w[sender] = tx_power_w
+                self.last_selected_tx_rate_bps[sender] = rate
+                self.last_selected_tx_distance_m[sender] = distance_m
+                if (
+                    recipient < 0
+                    or recipient >= self.n_agents
+                    or not self.uav_active[recipient]
+                ):
+                    continue
+
+                receiver_room = max(
+                    0,
+                    self.peer_buffer_bytes
+                    - int(queue_bytes_slot_start[recipient])
+                    - int(reserved_report_bytes_by_receiver[recipient]),
+                )
+                report_requested = min(desired_report_bytes, receiver_room)
+                reserved_report_bytes_by_receiver[recipient] += report_requested
+                requested = self.peer_sync_bytes + report_requested
 
             self.last_tx_active[sender] = True
             self.last_selected_recipient[sender] = int(recipient)

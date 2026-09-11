@@ -94,7 +94,7 @@ git add src/uav_search/envs/sensing.py src/uav_search/envs/paper_env.py tests/te
 git commit -m "fix: use endpoint-safe belief synchronization"
 ```
 
-## Task 2: Bound concurrent peer fan-in and make dead-recipient attempts observable
+## Task 2: Bound concurrent peer fan-in and make dead-recipient attempts observable ✅
 
 **Files:**
 
