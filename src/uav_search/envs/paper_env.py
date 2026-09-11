@@ -2166,6 +2166,16 @@ class PaperUAVEnv:
                 - self.peer_expiry_penalty * self.last_reports_expired_step
             )
         for i, name in enumerate(self.agents):
+            if self.peer_mode and not self.uav_active[i]:
+                rewards[name] = 0.0
+                components[name] = {
+                    "communication": 0.0,
+                    "energy": 0.0,
+                    "safety": 0.0,
+                    "task": 0.0,
+                    "total": 0.0,
+                }
+                continue
             safety, _ = self._safety_reward(i)
             if i in self.multirotor_indices:
                 communication = float(self._communication_reward(i))
@@ -2221,8 +2231,18 @@ class PaperUAVEnv:
             termination_reason = "horizon"
         else:
             termination_reason = "running"
-        terminated = {a: terminated_done for a in self.agents}
-        truncated = {a: truncated_done for a in self.agents}
+        if self.peer_mode:
+            terminated = {
+                name: bool(terminated_done or not self.uav_active[i])
+                for i, name in enumerate(self.agents)
+            }
+            truncated = {
+                name: bool(truncated_done and not terminated[name])
+                for name in self.agents
+            }
+        else:
+            terminated = {name: terminated_done for name in self.agents}
+            truncated = {name: truncated_done for name in self.agents}
         info = self._info(step_energy_j=step_energy, action_saturation=action_saturation)
         info["termination_reason"] = termination_reason
         return self._observations(), rewards, terminated, truncated, info

@@ -12,6 +12,8 @@ import numpy as np
 from uav_search.config import RESEARCH_SCENARIOS, load_config
 from uav_search.envs.paper_env import PaperUAVEnv
 
+from .termination import episode_finished
+
 
 def tx_power_to_action(power_w: float, minimum_w: float, maximum_w: float) -> float:
     """Map a physical transmit-power value back into the u6 continuous action slot."""
@@ -140,7 +142,7 @@ def run_calibration_episode(
         phy_failures += int(info["network_phy_failures"])
         tx_energy_j += float(info["network_tx_energy_j"])
 
-        if all(terminated.values()) or all(truncated.values()):
+        if episode_finished(terminated, truncated):
             break
 
     node_steps = max(1, direct + multihop + disconnected)

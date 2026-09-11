@@ -268,6 +268,55 @@ def test_report_expiry_is_nonterminal_and_penalized_for_team() -> None:
     assert all(value <= -env.peer_delivery_reward for value in rewards.values())
 
 
+def test_depleted_agent_gets_zero_reward_and_individual_termination() -> None:
+    cfg = deepcopy(load_config("masac", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    cfg["scenario"]["energy_cost_per_j"] = 0.0
+    cfg["scenario"]["sensing_cognitive_reward_weight"] = 0.0
+    env = PaperUAVEnv(cfg, seed=89)
+    set_safe_static_geometry(env)
+    env.battery_pct[0] = 0.0
+    env.targets[:] = np.asarray(
+        [[4000.0, 4000.0 - 200.0 * i] for i in range(env.n_targets)],
+        dtype=np.float64,
+    )
+    env.targets[0] = env.positions[1, :2]
+    y, x = env._target_grid_cell(0)
+    env.belief_maps[1, y, x] = env.peer_target_confirmation_threshold + 1e-4
+    env.fine_positive_cells_by_agent[1, y, x] = True
+    env.fine_target_evidence_by_agent[1, 0] = True
+    env.rng = FixedRandom(0.0)
+
+    _, rewards, terminated, truncated, _ = env.step(idle_actions(env))
+
+    assert rewards["uav_0"] == 0.0
+    assert rewards["uav_1"] > 0.0
+    assert terminated["uav_0"]
+    assert not terminated["uav_1"]
+    assert not truncated["uav_0"]
+
+
+def test_horizon_mixes_dead_termination_with_live_truncation() -> None:
+    cfg = deepcopy(load_config("masac", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    cfg["runtime"]["episode_steps_override"] = 1
+    cfg["scenario"]["energy_cost_per_j"] = 0.0
+    cfg["scenario"]["sensing_cognitive_reward_weight"] = 0.0
+    cfg["scenario"]["sensing_target_reward_weight"] = 0.0
+    env = PaperUAVEnv(cfg, seed=90)
+    set_safe_static_geometry(env)
+    env.battery_pct[0] = 0.0
+    env.rng = FixedRandom(0.99)
+
+    _, _, terminated, truncated, info = env.step(idle_actions(env))
+
+    assert terminated["uav_0"]
+    assert not truncated["uav_0"]
+    assert all(not terminated[name] for name in env.agents[1:])
+    assert all(truncated[name] for name in env.agents[1:])
+    assert info["termination_reason"] == "horizon"
+
+
 def test_false_confirmation_has_one_symmetric_team_penalty_and_consumes_evidence() -> None:
     cfg = deepcopy(load_config("masac", "u6"))
     cfg["scenario"]["network_backend"] = "analytical"

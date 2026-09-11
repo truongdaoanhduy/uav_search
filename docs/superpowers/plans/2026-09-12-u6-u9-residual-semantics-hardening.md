@@ -233,7 +233,7 @@ git add src/uav_search/envs/paper_env.py tests/test_u6_scenario_semantics.py
 git commit -m "fix: align false alarms and navigation feedback"
 ```
 
-## Task 4: Terminate depleted agents individually without suppressing truncation bootstrap
+## Task 4: Terminate depleted agents individually without suppressing truncation bootstrap ✅
 
 **Files:**
 

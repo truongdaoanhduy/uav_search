@@ -20,6 +20,7 @@ from uav_search.runtime import configure_runtime, resolve_device
 from .diagnostics import diagnose_episode
 from .logging import RunLogger
 from .progress import format_episode_progress, format_startup_summary, should_report_episode
+from .termination import episode_finished
 from .visualize import plot_simulation_scenario, plot_training_curves, plot_trajectory
 from .wandb_logger import WandbLogger
 
@@ -81,7 +82,7 @@ def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUA
         comm_rates.append(float(info["mean_comm_rate_mbps"]))
         saturations.append(float(info["action_saturation"]))
         obs = _obs_array(next_dict, env.agents)
-        if all(truncated.values()) or all(terminated.values()):
+        if episode_finished(terminated, truncated):
             break
     metrics = {
         "return_mean": float(returns.mean()),
@@ -255,7 +256,7 @@ def train_experiment(
                             wandb_update_every = int(cfg["runtime"].get("wandb_update_every", 100))
                             if update_index % max(1, wandb_update_every) == 0:
                                 wb.log({f"update/{k}": v for k, v in update_row.items()})
-                if all(truncated.values()) or all(terminated.values()):
+                if episode_finished(terminated, truncated):
                     break
 
             episode_sec = max(time.perf_counter() - episode_started, 1e-12)
