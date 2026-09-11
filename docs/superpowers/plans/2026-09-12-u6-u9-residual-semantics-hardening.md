@@ -360,7 +360,7 @@ git add src/uav_search/envs/paper_env.py tests/test_u6_scenario_semantics.py
 git commit -m "fix: expose previous peer recipient feedback"
 ```
 
-## Task 6: Update research documentation and verify the complete repository
+## Task 6: Update research documentation and verify the complete repository ✅
 
 **Files:**
 

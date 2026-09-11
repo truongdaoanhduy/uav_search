@@ -18,7 +18,7 @@ Kịch bản tổng thể hợp lý cho bài toán multi-UAV search + DTN:
 
 Không có chiều action nào thừa trên toàn miền trạng thái. Tuy vậy, action truyền thông đang được mã hóa bằng một continuous `Box` nhưng có quyết định ngưỡng/lượng tử hóa; đây là hạn chế tối ưu hóa đáng báo cáo, không phải lỗi logic cần đổi ngay.
 
-Audit phát hiện và đã sửa sáu nhóm lỗi có thể làm sai kết quả thí nghiệm:
+Audit phát hiện và đã sửa mười ba nhóm lỗi/ambiguity có thể làm sai kết quả thí nghiệm:
 
 1. Điều kiện xác nhận mục tiêu bị siết sai thành “posterior và fine-positive phải mới trong cùng step”.
 2. UavNetSim phát quá nhiều packet song song, chỉ commit được prefix 1 KiB và để ACK/process của action cũ tràn sang slot sau.
@@ -26,6 +26,13 @@ Audit phát hiện và đã sửa sáu nhóm lỗi có thể làm sai kết qu�
 4. Analytical backend tính cả UAV không truyền như nguồn nhiễu.
 5. Reward truyền GCS trả tối đa cho chỉ một byte và peer hop có thể farm reward.
 6. Safety shield đưa state về an toàn rồi reward không còn thấy action danh định nguy hiểm.
+7. Belief tuyến tính 8-bit tạo xác suất giả `0/1` và làm lệch prior `0.5`.
+8. Nhiều sender đồng thời có thể cùng chiếm một phần dung lượng trống của receiver.
+9. Chọn recipient đã cạn pin trở thành free no-op, policy không nhận được feedback thất bại.
+10. False confirmation không có hậu quả reward và local evidence không được tiêu thụ.
+11. Boundary clip/obstacle rollback có cùng reward với idling dù policy yêu cầu chuyển động bất hợp lệ.
+12. UAV cạn pin vẫn nhận team reward và tiếp tục bootstrap như agent sống; runner không dừng được dictionary done trộn.
+13. ACK feedback thiếu identity của recipient đã chọn dù own-state có một slot hằng bằng 0.
 
 ## 2. Kịch bản hiện tại
 
@@ -105,7 +112,7 @@ u9: 9 + 13*8 + 40 + 19 + 25 = 197
 
 | Khối | Kích thước | Nội dung |
 |---|---:|---|
-| Own state | 9 | normalized xyz, vxyz, battery, local contact degree, heading slot |
+| Own state | 9 | normalized xyz, vxyz, battery, local contact degree, previous recipient-bin center (peer mode); legacy fixed-wing vẫn dùng heading |
 | Mỗi peer | 13 | 11 cached fields nếu cache còn hạn + min/max-power link feasibility tức thời |
 | Report lifecycle | 40 | mỗi target: known, held fraction, remaining TTL, known delivery progress |
 | Local/network tail | 19 | queue, GCS delta/rate, previous ACK, time, TX/power/attempt, link feasibility, obstacle/nearest-peer proximity |
@@ -121,7 +128,7 @@ Các điểm đúng:
 Các hạn chế cần công bố, chưa nên đổi vội:
 
 - Hai min/max-power feasibility field của từng recipient là channel-sounding tức thời; đây là sensing assumption hơi lạc quan.
-- `last_tx_success` không đi kèm identity của recipient trước đó, gây một phần ambiguity cho policy feed-forward.
+- `last_tx_success` đi kèm previous recipient-bin center trong own-state slot 9; `last_tx_active` là validity flag. Checkpoint cũ cùng shape nhưng khác semantics, nên run khoa học mới phải retrain.
 - Topology info ở max power mô tả connectivity tiềm năng, không phải link đã thực sự được action chọn.
 - Centralized critic ghép local observations; không có privileged global state. Đây vẫn là một CTDE variant hợp lệ, nhưng phải mô tả đúng.
 
@@ -129,13 +136,15 @@ Các hạn chế cần công bố, chưa nên đổi vội:
 
 1. Kiểm tra đủ action cho mọi agent, kiểm tra shape và clip về `[-1,1]`.
 2. Tích phân chuyển động 3D từ ba action mobility.
-3. Clip boundary; rollback segment đụng obstacle.
-4. Safety shield chiếu candidate pose lên safe set; ghi displacement cho từng UAV.
+3. Clip boundary; rollback segment đụng obstacle; ghi riêng world-constraint displacement so với candidate danh định.
+4. Safety shield chiếu candidate pose lên safe set; ghi riêng pairwise-shield displacement cho từng UAV.
 5. Tính propulsion energy từ **chuyển động đã được shield**, cập nhật battery/deactivation.
 6. Refresh link/rate snapshot.
 7. Thực thi transmission từ dữ liệu đã tồn tại ở đầu slot:
    - gate/power/recipient từ action;
    - frozen slot-start snapshot;
+   - report capacity tại receiver được reserve bảo thủ theo thứ tự sender; sync bundle không chiếm application buffer;
+   - chọn peer đã depleted tạo failed-attempt feedback nhưng không tạo network intent/RF giả;
    - tối đa một application-level hop trong macro-step;
    - UavNetSim chỉ admit packet kế tiếp sau ACK hoặc terminal ARQ drop;
    - không còn packet của action cũ chạy qua ranh giới slot.
@@ -143,7 +152,7 @@ Các hạn chế cần công bố, chưa nên đổi vội:
 9. Cho report hiện có cơ hội forward cuối cùng, sau đó mới purge report quá TTL.
 10. Chạy sensing tại pose mới, cập nhật Bayes, xác nhận target và enqueue/retry report.
 11. Tính reward và diagnostics.
-12. Tăng time; terminate khi giao đủ report hoặc toàn bộ UAV cạn pin; horizon là `truncated`.
+12. Tăng time; mission success/all-depleted terminate toàn đội; mỗi UAV depleted terminate riêng và nhận reward 0; horizon chỉ truncate UAV còn sống. Runner dừng khi mọi agent đã `terminated OR truncated`, nhưng replay chỉ cắt bootstrap bởi `terminated`.
 
 Thứ tự **communication trước sensing** là có chủ đích: action `a_t` không được truyền measurement chỉ mới sinh ra trong transition đó; measurement mới chỉ được policy dùng từ `t+1`. Thứ tự **forward trước expiry** cũng hợp lý cho store-carry-forward vì bundle có một cơ hội dịch vụ cuối ở deadline.
 
@@ -201,6 +210,49 @@ Các hệ số 0.1/5/20 là calibration của dự án, không được trình b
 
 Docstring từng gọi class là PettingZoo ParallelEnv dù interface thực tế là custom Gymnasium-like dict API. Mô tả đã được sửa; không thay API runtime.
 
+### 6.7 Belief codec endpoint-safe
+
+**Lỗi:** codec tuyến tính `round(p*255)/255` biến xác suất lớn/nhỏ hữu hạn thành đúng `1/0` và biến prior `0.5` thành khoảng `0.50196`. Với minimum-entropy fusion, các endpoint giả này có thể trở thành bằng chứng gần như không đảo được.
+
+**Sửa:** dùng signed quantized log-odds đối xứng trong một byte. `0.5` có code trung tâm chính xác; decode luôn nằm trong `(0,1)`; code thừa của số level chẵn bị reject.
+
+### 6.8 Concurrent fan-in hữu hạn
+
+**Lỗi:** mọi sender tính receiver room từ cùng queue đầu slot nên có thể cùng admit vượt dung lượng còn lại; application chỉ nhận sender đầu và bỏ byte đã ACK của sender sau.
+
+**Sửa:** reserve report bytes theo sender index từ queue snapshot đầu slot. Reservation không bao gồm 4 KiB sync bundle và không được tái cấp phát sau link loss trong cùng closed slot.
+
+### 6.9 Recipient depleted
+
+**Lỗi:** gate-on tới peer depleted bị bỏ trước telemetry, reward bằng gate-off và policy không học tránh recipient chết.
+
+**Sửa:** lưu recipient/power/distance/report attempt trước liveness check; không tạo network intent hay RF energy, nhưng giữ `last_tx_active=True`, `success=False` để attempt cost và failed-report penalty có hiệu lực.
+
+### 6.10 False confirmation đối xứng
+
+**Lỗi:** xác nhận sai một empty cell chỉ tăng metric, không làm giảm return và không tiêu thụ evidence.
+
+**Sửa:** mỗi false confirmation mới tạo shared task event
+`-search_reward_coeff * sensing_target_reward_weight` đúng một lần, đánh dấu cell đã verified, đưa belief local của detector về codec floor và clear fine-positive local. Không sinh false report động.
+
+### 6.11 Boundary/obstacle correction
+
+**Lỗi:** candidate bị clip/rollback có thể kết thúc đúng pose của idle và nhận cùng reward.
+
+**Sửa:** ghi world-constraint correction sau boundary/obstacle và trước pair shield. Safety reward phạt riêng cả world correction và pair correction bằng hệ số safety hiện có; info xuất sum/max riêng.
+
+### 6.12 Agent depletion và runner
+
+**Lỗi:** UAV cạn pin vẫn nhận team reward và có `terminated=False` cho đến khi cả đội cạn; điều kiện runner `all(terminated) OR all(truncated)` không bao phủ trạng thái trộn.
+
+**Sửa:** inactive UAV nhận reward 0 và terminate riêng; horizon chỉ truncate agent chưa terminate. Helper dùng chung dừng khi mọi agent có `terminated OR truncated`. Replay terminal mask vẫn chỉ dùng `terminated`, nên time-limit transition tiếp tục bootstrap.
+
+### 6.13 Previous recipient feedback
+
+**Lỗi:** ACK/rate/power feedback không cho biết action recipient nào tạo ra kết quả, trong khi peer-mode own heading slot luôn bằng 0.
+
+**Sửa:** slot đó chứa tâm bin action của recipient trước, `last_tx_active` làm validity flag. U6/U9 vẫn 158/197 chiều; legacy heading không đổi. Checkpoint cũ tương thích shape nhưng không tương thích nghĩa, nên phải retrain cho run khoa học mới.
+
 ## 7. Những việc còn cần hiệu chuẩn/ablation
 
 Các mục sau không phải bug có đáp án duy nhất nên audit giữ nguyên:
@@ -210,13 +262,13 @@ Các mục sau không phải bug có đáp án duy nhất nên audit giữ nguy�
 3. Horizon sensitivity 300/600/900/1200 s.
 4. Obstacle count/radius sensitivity; sáu obstacle và 80–220 m là assumptions.
 5. So sánh continuous-hybrid encoding với actor hybrid thật nếu đây trở thành đóng góp nghiên cứu.
-6. Nếu cần Markov observability chặt hơn, thêm previous recipient identity hoặc recurrent policy—việc này đổi observation/checkpoint.
+6. Nếu cần memory dài hơn một bước cho partial observability, so sánh feed-forward hiện tại với recurrent policy; previous recipient một bước đã có trong observation.
 7. Kiểm tra buffer 3 MB và TTL 300 s bằng workload sensitivity.
 8. Không diễn giải max-power topology metrics như realized policy connectivity.
 
 ## 8. Paper được dùng
 
-Tất cả paper trực tiếp dùng trong audit này **đã có trong thư mục của bạn**; không cần bạn tải thêm:
+Các paper nền tảng dưới đây đã có trong thư mục của bạn:
 
 | Paper | Vị trí local | Vai trò |
 |---|---|---|
@@ -230,25 +282,38 @@ Tất cả paper trực tiếp dùng trong audit này **đã có trong thư mụ
 | *Drone delivery problem with multi-flight level* | `02_supporting/` | mốc độ cao 50/100/150 m |
 | *Reinforcement Learning-Based Dynamic Coverage Control of Multi-Rotor UAVs With Safety Priority* | thư mục gốc | safety filter và corrective/buffer reward |
 
-Không đọc thêm full paper/PDF bên ngoài cây `/home/aduy/Documents/NCKH/uav_research_paper` để đưa ra các sửa đổi này. Tra cứu web/plugin chỉ dùng để kiểm tra metadata/DOI và API contract, không dùng một paper ngoài thư mục làm căn cứ mới.
+Ba paper ngoài cây local đã được tra cứu và phải được báo riêng:
+
+| Paper ngoài local | Link chính thức/toàn văn | Vai trò trong quyết định |
+|---|---|---|
+| Khan, Yanmaz, Rinner, *Information Merging in Multi-UAV Cooperative Search*, ICRA 2014 | [PDF tác giả](https://pervasive.uni-klu.ac.at/BR/pubs/2014/Khan_ICRA2014.pdf) | Occupancy-map merging có giới hạn communication và detection error; củng cố yêu cầu không tạo certainty giả. Codec byte cụ thể vẫn là adaptation của dự án. |
+| Xiong et al., *Parametrized Deep Q-Networks Learning*, 2018 | [arXiv 1810.06394](https://arxiv.org/abs/1810.06394) · [PDF](https://arxiv.org/pdf/1810.06394) | Phương án actor rời rạc-liên tục cho future work; không được dùng để đổi MASAC/MADDPG/MATD3 trong patch này. |
+| Sun et al., *Multi-Agent Reinforcement Learning Based on Hybrid Action Representation for UAV Swarms' Integrated Communication and Control*, IEEE LWC 2026 | [DOI 10.1109/LWC.2026.3663841](https://doi.org/10.1109/LWC.2026.3663841) | Bằng chứng UAV-specific cho hướng hybrid communication/control; chỉ là future-work provenance, trang IEEE có thể yêu cầu quyền truy cập. |
+
+Ngoài ba nguồn này, tra cứu web/plugin được dùng để kiểm tra metadata, paper liên quan và contract Gymnasium; các constant kịch bản không được âm thầm thay bằng số ngoài paper local.
 
 ## 9. Kiểm chứng
 
-- Hai lượt `pytest -q` độc lập trước đồng bộ đều đạt **285 passed, 3 skipped** (109.63 s và 115.28 s).
-- Regression mới: confirmation tích lũy; idle/active interference; contiguous closed-slot prefix; không có late work; byte-proportional reward; shield correction.
+- Lượt sạch sau residual hardening: `python -m compileall -q src tests && pytest -q` đạt **300 passed, 3 skipped trong 120.68 s**.
+- Nhóm regression environment/runner mới đạt **48 passed**; smoke test MASAC/MADDPG/MATD3 đạt **25 passed, 3 skipped**.
+- Regression bao phủ: confirmation tích lũy; endpoint-safe belief codec; fan-in reservation; depleted-recipient feedback; false-confirmation penalty; world/pair correction; per-agent depletion; mixed done dictionaries; previous-recipient feature; idle/active interference; contiguous closed-slot prefix; không có late work; byte-proportional reward.
 - Stress probe u9 với 9 intent đồng thời (2,250,000 B requested): có đủ 9 outcome, commit 129,024 B; hai lần chạy cùng seed cho kết quả giống hệt; sau busy slot và idle slot đều còn 0 pending completion, 0 MAC bookkeeping entry và 0 late event.
-- `python -m py_compile src/uav_search/envs/paper_env.py src/uav_search/envs/network_backends.py`: pass.
-- `git diff --check`: pass.
-- Không sửa code thuật toán MASAC, MADDPG hoặc MATD3.
-- Commit/push chỉ được thực hiện sau khi toàn bộ các cổng kiểm chứng trên đã xanh.
+- `git diff --check` và kiểm tra compile đều pass.
+- Không sửa file nào trong `src/uav_search/algorithms/`; replay terminal mask vẫn chỉ dùng `terminated`.
+- Push chỉ được thực hiện sau khi toàn bộ các cổng kiểm chứng trên xanh.
 
 ## 10. File thay đổi chính
 
 - `src/uav_search/envs/paper_env.py`
+- `src/uav_search/envs/sensing.py`
 - `src/uav_search/envs/network_backends.py`
+- `src/uav_search/runner/termination.py`
+- `src/uav_search/runner/train.py`
+- `src/uav_search/runner/network_calibration.py`
 - `configs/scenarios/u6.yaml`
 - `configs/scenarios/u9.yaml`
 - `tests/test_scenario_audit_regressions.py`
+- `tests/test_runner_termination.py`
 - `tests/test_network_backends.py`
 - `tests/test_u6_scenario_semantics.py`
 - `tests/test_u6_scenario_hardening_v2.py`

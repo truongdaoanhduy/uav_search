@@ -81,7 +81,32 @@ These choices have related literature, but **no source was found that specifies 
 | Same 2 km **reference-power envelope** for UAV-UAV and UAV-GCS candidate links | yes | A simple project baseline; both use the same `P^(1/3)` envelope scaling based on UavNetSim's urban-NLoS A2A exponent but different A2A/A2G propagation models. Current hardened model requires a fresh topology recalibration. |
 | Static victim targets | yes | Retains the post-disaster root-task interpretation; Liu's 3D sensing paper uses moving targets. |
 | Overall sensing-task reward scale | existing `search_reward_coeff=20` | Liu supports the 1.0:0.1 relative weights, not this global scale. |
-| Belief fusion and cell confirmation | each UAV keeps a cumulative local posterior; `0.99` plus that UAV's persistent direct low/fine positive evidence confirms the target, even when the two facts arise in different steps. Receiver-only minimum-entropy fusion occurs only after a complete peer synchronization bundle. | Liu 2024 uses repeated Bayesian updates and high-altitude broad search followed by low-altitude precise capture. The exact 50 m evidence gate, 4 KiB transport, 8-bit belief serialization, and receiver-only fusion are deterministic research adaptations. Fresh fine evidence is required only to create a new report generation after TTL expiry. |
+| Belief fusion and cell confirmation | each UAV keeps a cumulative local posterior; `0.99` plus that UAV's persistent direct low/fine positive evidence confirms the target, even when the two facts arise in different steps. Receiver-only minimum-entropy fusion occurs only after a complete peer synchronization bundle. Belief bytes use a symmetric quantized log-odds codec: neutral `p=0.5` is exact and decoded values stay strictly inside `(0,1)`. | Liu 2024 uses repeated Bayesian updates and high-altitude broad search followed by low-altitude precise capture. Khan, Yanmaz, and Rinner (ICRA 2014) study communication-limited local occupancy-map merging and detection errors. The exact probability floor, 50 m evidence gate, 4 KiB transport, one-byte codec, and receiver-only minimum-entropy rule are deterministic research adaptations. Fresh fine evidence is required only to create a new report generation after TTL expiry. |
+| Concurrent peer fan-in | sender-index-ordered conservative reservation of receiver report capacity from the slot-start queue; sync bundles do not consume application-buffer reservation | Prevents multiple simultaneous senders from overcommitting the same free bytes. Unused reservation after link loss is intentionally not reclaimed inside the closed slot; this is a deterministic application-admission rule, not a paper constant. |
+| False confirmation consequence | one newly false-confirmed empty cell contributes the negative of one true-confirmation task event, consumes detector-local fine-positive evidence, and resets only that local belief to the codec floor | Liu supplies `Pd/Pf`, Bayesian belief, and the confirmation threshold, but not this exact reward consequence. The symmetric scale is a `RESEARCH_DESIGN_CALIBRATION_REQUIRED` choice and prevents consequence-free false alarms. |
+| Constraint correction feedback | pairwise-shield displacement and boundary/obstacle correction are tracked separately and both use the existing normalized safety coefficient | Safety-filter corrective feedback has literature precedent; the separate bookkeeping and shared scale are project adaptations. |
+| Depleted-agent semantics | an inactive UAV gets zero reward and individual `terminated=True`; horizon only truncates live agents; rollout ends when every agent is terminated or truncated | Follows the Gymnasium termination/truncation contract. Fixed-size joint replay is retained and only true termination cuts bootstrap. |
+| Previous-recipient feedback | peer-mode own-state slot 9 stores the center of the previously selected recipient action bin; `last_tx_active` is its validity flag | Removes a constant-zero feature without changing U6/U9 dimensions. Legacy fixed-wing heading remains unchanged. Checkpoints are shape-compatible but semantically stale, so new scientific runs must retrain. |
+
+### External papers consulted for the residual audit
+
+These papers were not found in the supplied local paper tree when the residual
+semantics were reviewed:
+
+- Khan, Yanmaz, and Rinner, [*Information Merging in Multi-UAV Cooperative
+  Search*](https://pervasive.uni-klu.ac.at/BR/pubs/2014/Khan_ICRA2014.pdf),
+  ICRA 2014: communication-limited occupancy-map merging and detection-error
+  context. It supports the need to preserve probabilistic evidence; the exact
+  byte codec remains this project's design.
+- Xiong et al., [*Parametrized Deep Q-Networks Learning: Reinforcement Learning
+  with Discrete-Continuous Hybrid Action Space*](https://arxiv.org/abs/1810.06394),
+  2018: a future explicit hybrid-action alternative. It does not justify changing
+  MASAC/MADDPG/MATD3 in this patch.
+- Sun et al., [*Multi-Agent Reinforcement Learning Based on Hybrid Action
+  Representation for UAV Swarms' Integrated Communication and
+  Control*](https://doi.org/10.1109/LWC.2026.3663841), IEEE Wireless
+  Communications Letters, 2026: UAV-specific hybrid communication/control
+  context, again recorded as future work rather than implemented here.
 
 ## Parameters still not sourced closely enough
 
@@ -96,7 +121,7 @@ The following are intentionally **not promoted to paper-backed values**:
 | Delivery completion reward | 20 | `RESEARCH_DESIGN_CALIBRATION_REQUIRED` |
 | GCS byte-progress reward maximum | 5 per complete 1 MB report, accrued by ACKed fraction | `RESEARCH_DESIGN_CALIBRATION_REQUIRED`; byte scaling prevents fragment-count reward farming |
 | Peer communication-attempt cost | 0.1 per peer-directed action | Literature-backed mechanism from Wang et al. 2026; exact coefficient is `RESEARCH_DESIGN_CALIBRATION_REQUIRED` |
-| Shield-correction reward scale | existing `safety_reward_coeff=8`, normalized by 141.4 m | CBF corrective reward is literature-backed; exact transfer of this scale is `RESEARCH_DESIGN_CALIBRATION_REQUIRED` |
+| Shield/world-correction reward scale | existing `safety_reward_coeff=8`, normalized by 141.4 m | Corrective feedback is applied independently to pairwise shielding and boundary/obstacle correction. The mechanism has safety-filter precedent; this exact shared scale is `RESEARCH_DESIGN_CALIBRATION_REQUIRED`. |
 | Per-joule reward cost | 0.001 | `RESEARCH_DESIGN_CALIBRATION_REQUIRED` |
 | Simplified propulsion coefficients (`P0`, blade/frame drag terms) | legacy assumed values | `RESEARCH_ASSUMPTION`; battery capacity is sourced, propulsion coefficients are not |
 | Exact 2 km-at-0.1 W suitability after power-scaled/A2G hardening | rerun the 1/1.5/2/2.5 km 50-seed × 600 s sweep and report sensitivity | `RECALIBRATION_REQUIRED`; the old fixed-radius sweep is historical only |
