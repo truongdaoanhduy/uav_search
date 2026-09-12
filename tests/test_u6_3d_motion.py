@@ -69,7 +69,7 @@ def test_vertical_motion_is_clipped_to_configured_altitude_bounds():
     assert info["boundary_hits"] >= 1
 
 
-def test_peer_motion_barrier_shield_projects_candidate_that_would_violate_safe_distance():
+def test_peer_motion_safety_projection_projects_candidate_that_would_violate_safe_distance():
     env = make_u6(seed=93)
     env.reset(seed=93)
     env.obstacles[:, :2] = [4900.0, 4900.0]

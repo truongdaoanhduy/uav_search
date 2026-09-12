@@ -283,7 +283,7 @@ def test_shield_correction_is_visible_to_reward_and_counted_once_per_uav() -> No
     env.velocities[:] = env.positions - previous
     env.uav_active[:] = True
 
-    env._apply_peer_discrete_barrier_shield(previous)
+    env._apply_peer_safety_projection(previous)
     safety_reward, close_count = env._safety_reward(0)
 
     assert np.linalg.norm(env.positions[0] - env.positions[1]) > env.safety_distance_m

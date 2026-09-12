@@ -93,7 +93,7 @@ def test_tx_power_changes_operational_envelope_instead_of_both_powers_hitting_sa
     assert high.delivered_bytes > 0
 
 
-def test_discrete_time_barrier_shield_filters_unsafe_motion_before_state_transition() -> None:
+def test_geometric_projection_shield_filters_unsafe_motion_before_state_transition() -> None:
     env = make_env(seed=104)
     put_obstacles_far_away(env)
     env.positions[:] = np.asarray(
@@ -158,3 +158,13 @@ def test_native_gcs_rate_reward_scales_with_committed_report_bytes() -> None:
 
     expected = float(env.assumed["comm_reward_max"]) * 1024 / env.peer_report_bytes
     assert env._communication_reward(0) == pytest.approx(expected)
+
+
+def test_u6_safety_contract_uses_geometric_projection_shield_naming() -> None:
+    cfg = load_config("masac", "u6")
+    env = make_env(seed=108)
+
+    assert cfg["scenario"]["safety_filter"] == "geometric_projection_shield"
+    assert "CBF" not in str(cfg["scenario"]["safety_filter_provenance"]).upper()
+    assert hasattr(env, "_apply_peer_safety_projection")
+    assert not hasattr(env, "_apply_peer_discrete_barrier_shield")

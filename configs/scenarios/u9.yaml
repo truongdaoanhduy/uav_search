@@ -139,8 +139,8 @@ scenario:
   launch_radius_provenance: RESEARCH_DESIGN_DERIVED_SAFE_PAD_GEOMETRY
   safety_distance_m: 141.4
   safety_distance_provenance: "LITERATURE_BACKED_BASELINE:LIU_2024_SAFE_DISTANCE_141_4M"
-  safety_filter: discrete_time_cbf_style_projection
-  safety_filter_provenance: "LITERATURE_BACKED_CONCEPT:CBF_SAFE_RL_MULTI_UAV;RESEARCH_ADAPTATION:NO_QP_DEPENDENCY"
+  safety_filter: geometric_projection_shield
+  safety_filter_provenance: "LITERATURE_BACKED_CONCEPT:SAFETY_SHIELDED_RL;RESEARCH_ADAPTATION:PAIRWISE_GEOMETRIC_PROJECTION"
   initial_min_separation_m: 141.4
   initial_min_separation_provenance: "RESEARCH_ADAPTATION:LIU_2024_SAFE_DISTANCE_141_4M"
   initialization_provenance: "LITERATURE_BACKED_BASELINE:GLIDE_2024_COMMON_BASE"

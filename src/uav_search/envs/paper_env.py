@@ -1733,14 +1733,15 @@ class PaperUAVEnv:
         self.total_bytes_transmitted += int(self.last_bytes_transmitted)
         self.reports_delivered = int(self.report_delivered.sum())
 
-    def _apply_peer_discrete_barrier_shield(self, previous_positions: np.ndarray) -> None:
+    def _apply_peer_safety_projection(self, previous_positions: np.ndarray) -> None:
         """Project nominal peer motion onto the one-step pairwise safe set.
 
-        This is a lightweight discrete-time CBF-style shield: the MARL policy
-        proposes nominal motion, then the low-level safety layer minimally moves
-        an unsafe candidate pair along their separation axis before the state is
-        exposed to sensing/networking.  The legacy paper scenarios are untouched.
-        A final rollback remains only as a numerical/constraint fallback.
+        This is a lightweight geometric projection shield for continuous control.
+        The MARL policy proposes nominal motion, then the low-level safety layer
+        minimally separates unsafe candidate pairs along their separation axis
+        before the state is exposed to sensing/networking. It does not solve a
+        CBF-QP or claim formal forward-invariance guarantees. Legacy paper
+        scenarios are untouched, and rollback is only a constraint fallback.
         """
         self.last_safety_correction_m_by_agent.fill(0.0)
         if not self.peer_mode or self.n_agents < 2:
@@ -1784,7 +1785,7 @@ class PaperUAVEnv:
             if not changed:
                 break
 
-        # Barrier projection changes the realized low-level motion; expose that
+        # Safety projection changes the realized low-level motion; expose that
         # through velocity so energy and the next Markov state match the safe move.
         self.velocities[active] = (self.positions[active] - previous_positions[active]) / max(self.dt, 1e-12)
         vmax = float(self.paper["multirotor_speed_max_mps"])
@@ -2094,7 +2095,7 @@ class PaperUAVEnv:
             self.last_world_constraint_correction_m_by_agent[:] = (
                 world_correction_m
             )
-            self._apply_peer_discrete_barrier_shield(previous_positions)
+            self._apply_peer_safety_projection(previous_positions)
             # Propulsion energy follows the realized shielded motion rather than
             # the nominal unsafe command that was filtered out.
             for i in self.multirotor_indices:
