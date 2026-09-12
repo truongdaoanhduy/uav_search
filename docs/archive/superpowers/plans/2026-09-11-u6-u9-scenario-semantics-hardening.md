@@ -10,7 +10,7 @@
 
 **Tech Stack:** Python 3, NumPy, Gymnasium, Pytest, YAML, UavNetSim backend.
 
-**Spec:** `docs/superpowers/specs/2026-09-11-u6-u9-scenario-semantics-hardening.md`
+**Spec:** `docs/archive/superpowers/specs/2026-09-11-u6-u9-scenario-semantics-hardening.md`
 
 ## Global Constraints
 

@@ -3,8 +3,13 @@ import math
 import numpy as np
 import pytest
 
-import uav_search.envs.sensing as sensing
-from uav_search.envs.sensing import bayes_update, binary_entropy, fov_offsets, profile_for_altitude
+from uav_search.envs import sensing
+from uav_search.envs.sensing import (
+    bayes_update,
+    binary_entropy,
+    fov_offsets,
+    profile_for_altitude,
+)
 
 
 def test_profile_for_altitude_uses_nearest_reference_level():

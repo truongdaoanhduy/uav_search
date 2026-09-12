@@ -25,7 +25,7 @@ def make_env(seed: int = 44, **scenario_overrides) -> PaperUAVEnv:
 
 def idle_actions(env: PaperUAVEnv) -> dict[str, np.ndarray]:
     return {
-        name: np.asarray([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
+        name: np.asarray([0.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
         for name in env.agents
     }
 
@@ -33,7 +33,7 @@ def idle_actions(env: PaperUAVEnv) -> dict[str, np.ndarray]:
 def tx_to_gcs_actions(env: PaperUAVEnv, sender: int = 0) -> dict[str, np.ndarray]:
     actions = idle_actions(env)
     actions[env.agents[sender]] = np.asarray(
-        [-1.0, 0.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32
+        [0.0, 0.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32
     )
     return actions
 

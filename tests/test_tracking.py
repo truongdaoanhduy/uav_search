@@ -3,7 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from uav_search.runner.wandb_logger import tracking_mode, WandbLogger
+import uav_search.runner.wandb_logger as wandb_logger_module
+from uav_search.runner.wandb_logger import WandbLogger, tracking_mode
 
 
 class FakeTable:
@@ -73,6 +74,22 @@ def fake_wandb_module(run, init_error=None):
     )
 
 
+def test_episode_axis_metrics_cover_every_episode_namespace():
+    axes = wandb_logger_module.episode_axis_metrics(7)
+
+    assert axes == {
+        "paper/episode": 7,
+        "swarm/episode": 7,
+        "mission/episode": 7,
+        "network/episode": 7,
+        "sensing/episode": 7,
+        "group/episode": 7,
+        "reward/episode": 7,
+        "rl/episode": 7,
+        "performance/episode": 7,
+    }
+
+
 def test_tracking_mode_without_api_key_is_local(tmp_path):
     assert tracking_mode() == "local"
     logger = WandbLogger(run_name="no-key", config={}, run_dir=tmp_path, mode="auto")
@@ -102,7 +119,9 @@ def test_online_logger_streams_diagnostics_and_artifacts(monkeypatch, tmp_path):
     assert logger.run_url == run.url
     assert ("update/update", {}) in run.defined_metrics
     assert ("update/*", {"step_metric": "update/update"}) in run.defined_metrics
-    for prefix in ["paper", "swarm", "group", "reward", "rl", "performance"]:
+    for prefix in [
+        "paper", "swarm", "mission", "network", "sensing", "group", "reward", "rl", "performance"
+    ]:
         assert (f"{prefix}/episode", {}) in run.defined_metrics
         assert (f"{prefix}/*", {"step_metric": f"{prefix}/episode"}) in run.defined_metrics
     assert ("paper/episode", {}) in run.defined_metrics

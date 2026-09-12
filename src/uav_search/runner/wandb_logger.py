@@ -2,12 +2,28 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 WANDB_ENTITY = "uav_search_paper"
 WANDB_PROJECT = "uav_search_target"
+EPISODE_METRIC_PREFIXES = (
+    "paper",
+    "swarm",
+    "mission",
+    "network",
+    "sensing",
+    "group",
+    "reward",
+    "rl",
+    "performance",
+)
+
+
+def episode_axis_metrics(episode: int) -> dict[str, int]:
+    """Return the custom W&B step value for every per-episode namespace."""
+    return {f"{prefix}/episode": int(episode) for prefix in EPISODE_METRIC_PREFIXES}
 
 
 def tracking_mode(api_key: str | None = None, requested: str = "auto") -> str:
@@ -80,7 +96,7 @@ class WandbLogger:
             self.online = self.active and self.mode == "online"
             if self.active:
                 self._define_metrics()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             self._fallback("init", exc)
 
     @property
@@ -104,12 +120,12 @@ class WandbLogger:
         if self.run is None or not hasattr(self.run, "define_metric"):
             return
         try:
-            for prefix in ("paper", "swarm", "group", "reward", "rl", "performance"):
+            for prefix in EPISODE_METRIC_PREFIXES:
                 self.run.define_metric(f"{prefix}/episode")
                 self.run.define_metric(f"{prefix}/*", step_metric=f"{prefix}/episode")
             self.run.define_metric("update/update")
             self.run.define_metric("update/*", step_metric="update/update")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             print(
                 f"[W&B WARNING] Could not define custom metric axes: "
                 f"{type(exc).__name__}: {exc}",
@@ -135,7 +151,7 @@ class WandbLogger:
             return
         try:
             self.run.log(metrics, step=step)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             self._fallback("log", exc)
 
     def log_low_episode(self, payload: dict[str, Any]) -> None:
@@ -151,7 +167,7 @@ class WandbLogger:
                 "diagnostics/low_primary_cause": str(row.get("primary_cause", "unknown")),
             }
             self.run.log(payload)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             self._fallback("low-episode", exc)
 
     def log_error(self, payload: dict[str, Any]) -> None:
@@ -161,7 +177,7 @@ class WandbLogger:
             return
         try:
             self.run.log({"diagnostics/error": json.dumps(row, ensure_ascii=False, default=str)})
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             self._fallback("error", exc)
 
     def log_image(self, path: str | Path, key: str) -> None:
@@ -172,7 +188,7 @@ class WandbLogger:
             return
         try:
             self.run.log({key: self._wandb.Image(str(file_path))})
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             self._fallback(f"image:{key}", exc)
 
     def log_model(self, path: str | Path, name: str, aliases: Iterable[str] = ()) -> None:
@@ -185,7 +201,7 @@ class WandbLogger:
             artifact = self._wandb.Artifact(name=name, type="model")
             artifact.add_file(str(file_path), name=file_path.name)
             self.run.log_artifact(artifact, aliases=list(aliases))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             self._fallback(f"model:{file_path.name}", exc)
 
     def log_run_artifact(self, name: str) -> None:
@@ -202,7 +218,7 @@ class WandbLogger:
                 if path.exists():
                     artifact.add_dir(str(path))
             self.run.log_artifact(artifact, aliases=["latest"])
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             self._fallback("run-artifact", exc)
 
     def update_summary(self, values: dict[str, Any]) -> None:
@@ -210,7 +226,7 @@ class WandbLogger:
             return
         try:
             self.run.summary.update(values)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             self._fallback("summary", exc)
 
     @staticmethod
@@ -235,7 +251,7 @@ class WandbLogger:
         try:
             columns, data = self._table_rows(rows)
             self.run.log({key: self._wandb.Table(columns=columns, data=data)})
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             self._fallback(f"table:{key}", exc)
 
     def finish(self) -> None:
@@ -247,5 +263,5 @@ class WandbLogger:
             return
         try:
             self.run.finish()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - W&B failures must not abort training
             self._fallback("finish", exc)

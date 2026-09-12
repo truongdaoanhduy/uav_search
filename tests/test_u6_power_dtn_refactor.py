@@ -15,7 +15,7 @@ def analytical_u6(seed=44):
 
 def idle_actions(env):
     # Gate is OFF; vertical acceleration is neutral and RF power is at its minimum.
-    return {a: np.array([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
+    return {a: np.array([0.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
 
 
 def test_u6_config_uses_literature_backed_report_lifetime_and_power_contract():
@@ -193,7 +193,10 @@ def test_u6_flight_energy_excludes_root_paper_constant_pcom_to_avoid_double_coun
 
 
 def test_higher_tx_power_extends_reference_power_contact_envelope():
-    from uav_search.envs.network_backends import TransmissionIntent, create_network_backend
+    from uav_search.envs.network_backends import (
+        TransmissionIntent,
+        create_network_backend,
+    )
 
     cfg = deepcopy(load_config("masac", "u6"))
     cfg["scenario"]["network_backend"] = "analytical"
@@ -230,7 +233,7 @@ def test_tx_power_slot_no_longer_controls_byte_fraction():
     env._enqueue_report(0, 0)
     actions = idle_actions(env)
     # Gate ON, minimum configured power, GCS recipient.
-    actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, -1.0, 0.999], dtype=np.float32)
+    actions["uav_0"] = np.array([0.0, 0.0, 0.0, 1.0, -1.0, 0.999], dtype=np.float32)
 
     _, _, _, _, info = env.step(actions)
 
@@ -248,7 +251,7 @@ def test_packet_payload_is_packetization_size_not_one_packet_per_rl_step():
     env._refresh_links()
     assert env._enqueue_report(0, 0)
     actions = idle_actions(env)
-    actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, -1.0, 0.999], dtype=np.float32)
+    actions["uav_0"] = np.array([0.0, 0.0, 0.0, 1.0, -1.0, 0.999], dtype=np.float32)
 
     _, _, _, _, info = env.step(actions)
 

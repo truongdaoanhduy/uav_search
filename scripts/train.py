@@ -8,11 +8,11 @@ from uav_search.runner.train import train_experiment
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Train a UAV-search MARL baseline using the root-paper simulator.")
+    p = argparse.ArgumentParser(description="Train a UAV-search MARL baseline on a configured research or reproduction scenario.")
     p.add_argument("--algorithm", choices=PAPER_ALGORITHMS, required=True)
     p.add_argument("--scenario", choices=ALL_SCENARIOS, required=True)
     p.add_argument("--episodes", type=int, default=None, help="Override training episodes; paper reference is 50,000")
-    p.add_argument("--steps", type=int, default=None, help="Development-only override; paper value is 50 steps/episode")
+    p.add_argument("--steps", type=int, default=None, help="Development-only horizon override; omit to use the selected scenario config")
     p.add_argument("--seed", type=int, default=44)
     p.add_argument("--device", default="auto", help="auto, cpu, cuda, cuda:0, ...")
     p.add_argument("--amp", choices=["auto", "on", "off"], default="auto", help="Mixed precision policy for CUDA")

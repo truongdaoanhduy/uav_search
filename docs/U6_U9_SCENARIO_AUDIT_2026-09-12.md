@@ -18,7 +18,7 @@ Kịch bản tổng thể hợp lý cho bài toán multi-UAV search + DTN:
 
 Không có chiều action nào thừa trên toàn miền trạng thái. Tuy vậy, action truyền thông đang được mã hóa bằng một continuous `Box` nhưng có quyết định ngưỡng/lượng tử hóa; đây là hạn chế tối ưu hóa đáng báo cáo, không phải lỗi logic cần đổi ngay.
 
-Audit phát hiện và đã sửa mười ba nhóm lỗi/ambiguity có thể làm sai kết quả thí nghiệm:
+Audit phát hiện và đã sửa mười lăm nhóm lỗi/ambiguity có thể làm sai kết quả thí nghiệm:
 
 1. Điều kiện xác nhận mục tiêu bị siết sai thành “posterior và fine-positive phải mới trong cùng step”.
 2. UavNetSim phát quá nhiều packet song song, chỉ commit được prefix 1 KiB và để ACK/process của action cũ tràn sang slot sau.
@@ -33,6 +33,8 @@ Audit phát hiện và đã sửa mười ba nhóm lỗi/ambiguity có thể là
 11. Boundary clip/obstacle rollback có cùng reward với idling dù policy yêu cầu chuyển động bất hợp lệ.
 12. UAV cạn pin vẫn nhận team reward và tiếp tục bootstrap như agent sống; runner không dừng được dictionary done trộn.
 13. ACK feedback thiếu identity của recipient đã chọn dù own-state có một slot hằng bằng 0.
+14. Topology/rate snapshot có thể stale trong chính transition nếu radio energy làm UAV cạn pin sau lần refresh đầu slot.
+15. Dùng team `return_sum` làm reward-facing metric chính làm U9 trông lớn/nhỏ cơ học hơn U6 chỉ vì số agent khác nhau.
 
 ## 2. Kịch bản hiện tại
 
@@ -59,29 +61,31 @@ Khác biệt cấu hình thực chất giữa u6 và u9 chỉ là số UAV và b
 Action là:
 
 ```text
-[a0 horizontal_thrust,
- a1 horizontal_acceleration_azimuth,
- a2 vertical_acceleration,
+[a0 acceleration_x,
+ a1 acceleration_y,
+ a2 acceleration_z,
  a3 transmit_gate,
  a4 transmit_power,
  a5 recipient]
 ```
 
+**Cartesian action contract:** `a0:a2` are direct normalized acceleration components. `[0,0,0]` means zero commanded acceleration. `a3` (gate) and `a5` (recipient) are hard execution semantics; training canonicalizes them before replay/critic use and uses straight-through gradients, while MASAC entropy covers only `a0,a1,a2,a4`.
+
 | Chiều | Mapping hiện tại | Có cần thiết? | Lưu ý |
 |---|---|---|---|
-| `a0` | `[-1,1] -> [0,1]`, nhân `a_max=8 m/s²` | Có | Khi thrust bằng 0 thì `a1` tạm thời không có tác dụng, nhưng `a1` không thừa toàn cục |
-| `a1` | góc gia tốc ngang `[-π,π]` | Có | Đây là hướng vector gia tốc, không phải heading bền vững |
-| `a2` | gia tốc đứng `[-8,+8] m/s²` | Có | Tạo trade-off altitude–FOV–Pd/Pf–link |
+| `a0` | gia tốc Cartesian `a_x ∈ [-8,+8] m/s²` | Có | Zero thật sự là không gia tốc theo x; không còn bias 50% thrust tại action 0 |
+| `a1` | gia tốc Cartesian `a_y ∈ [-8,+8] m/s²` | Có | Độc lập với `a_x`, tránh singularity/plateau của polar thrust–azimuth |
+| `a2` | gia tốc Cartesian `a_z ∈ [-8,+8] m/s²` | Có | Tạo trade-off altitude–FOV–Pd/Pf–link |
 | `a3` | truyền khi `a3 > 0` | Có | Tránh always-on interference/energy/attempt; là quyết định nhị phân qua threshold |
 | `a4` | tuyến tính sang 0.1–0.4 W | Có | Điều khiển reach/rate/energy; chỉ có tác dụng khi gate bật |
 | `a5` | lượng tử hóa thành một trong `N-1` peer hoặc GCS | Có | Cần cho routing; các khoảng action tạo plateau |
 
 ### Hạn chế action còn lại
 
-- `a3` và `a5` là biến rời rạc được nhét vào continuous `Box`. Critic phải học hàm có discontinuity/plateau; gradient actor có thể kém ổn định.
-- GCS được chọn khi queue trống sẽ thành no-op; power/recipient không có hiệu lực khi gate tắt. Đây là conditional relevance, không phải action thừa.
-- Có thể nghiên cứu hybrid actor (Bernoulli/Categorical + continuous motion/power) sau này, nhưng đổi đó sẽ tác động cả ba thuật toán và checkpoint, nên không thực hiện trong audit này.
-- Metric `action_saturation` hiện đếm chung cả biến continuous và hybrid; dùng để chẩn đoán định tính được nhưng không nên diễn giải như saturation vật lý thuần túy.
+- `a3` và `a5` vẫn là biến rời rạc được vận chuyển qua continuous `Box`; critic/replay dùng hard canonical values và actor dùng straight-through relaxation, nên đây là hybrid approximation chứ chưa phải categorical actor chính xác.
+- Khi gate tắt, power/recipient được canonicalize về neutral values và không truyền gradient vào critic path; nhờ đó mọi lệnh `TX OFF` có cùng semantic representation thay vì tạo alias vô nghĩa.
+- GCS được chọn khi queue trống vẫn là no-op ở application layer; đây là conditional relevance của routing action, không phải một transmission attempt có payload.
+- Metric `action_saturation` chỉ đếm ba gia tốc continuous và power khi gate bật; gate/recipient hard semantics không còn bị tính như saturation continuous.
 
 ## 4. State và observation
 
@@ -127,6 +131,7 @@ Các điểm đúng:
 
 Các hạn chế cần công bố, chưa nên đổi vội:
 
+- Probe động U6/U9 xác nhận bốn summary feature là **thừa thông tin theo nghĩa đại số**: own contact-degree suy ra đúng từ các peer max-power feasibility bit; queue fraction suy ra đúng từ tổng held-fraction với report/buffer size cố định; hai tail bit `min_best_peer`/`max_best_peer` là phép OR/max của các peer feasibility bit. Sai số kiểm tra bằng `0` trên các rollout đã probe. Chúng không phải dead state vì là summary/inductive-bias có thể giúp học; xóa sẽ đổi `obs_dim` và làm checkpoint cũ không còn cùng kiến trúc, nên chỉ nên xóa sau ablation.
 - Hai min/max-power feasibility field của từng recipient là channel-sounding tức thời; đây là sensing assumption hơi lạc quan.
 - `last_tx_success` đi kèm previous recipient-bin center trong own-state slot 9; `last_tx_active` là validity flag. Checkpoint cũ cùng shape nhưng khác semantics, nên run khoa học mới phải retrain.
 - Topology info ở max power mô tả connectivity tiềm năng, không phải link đã thực sự được action chọn.
@@ -152,7 +157,7 @@ Các hạn chế cần công bố, chưa nên đổi vội:
 9. Cho report hiện có cơ hội forward cuối cùng, sau đó mới purge report quá TTL.
 10. Chạy sensing tại pose mới, cập nhật Bayes, xác nhận target và enqueue/retry report.
 11. Tính reward và diagnostics.
-12. Tăng time; mission success/all-depleted terminate toàn đội; mỗi UAV depleted terminate riêng và nhận reward 0; horizon chỉ truncate UAV còn sống. Runner dừng khi mọi agent đã `terminated OR truncated`, nhưng replay chỉ cắt bootstrap bởi `terminated`.
+12. Tăng time; mission success/all-depleted terminate toàn đội. UAV đã inactive từ đầu step không tạo transition mới; UAV cạn pin trong chính step vẫn nhận reward của transition cuối rồi terminate riêng. Với U6/U9, deadline 600-step là finite-horizon terminal cho toàn bộ agent vì remaining time nằm trong observation; legacy paper scenarios vẫn dùng external truncation. Replay dùng `valid` mask để loại row hậu-terminal và chỉ bootstrap khi `terminated=False`.
 
 Thứ tự **communication trước sensing** là có chủ đích: action `a_t` không được truyền measurement chỉ mới sinh ra trong transition đó; measurement mới chỉ được policy dùng từ `t+1`. Thứ tự **forward trước expiry** cũng hợp lý cho store-carry-forward vì bundle có một cơ hội dịch vụ cuối ở deadline.
 
@@ -245,7 +250,7 @@ Docstring từng gọi class là PettingZoo ParallelEnv dù interface thực t�
 
 **Lỗi:** UAV cạn pin vẫn nhận team reward và có `terminated=False` cho đến khi cả đội cạn; điều kiện runner `all(terminated) OR all(truncated)` không bao phủ trạng thái trộn.
 
-**Sửa:** inactive UAV nhận reward 0 và terminate riêng; horizon chỉ truncate agent chưa terminate. Helper dùng chung dừng khi mọi agent có `terminated OR truncated`. Replay terminal mask vẫn chỉ dùng `terminated`, nên time-limit transition tiếp tục bootstrap.
+**Sửa:** snapshot liveness ở đầu transition. UAV đã inactive từ đầu step nhận reward 0 và row replay của nó có `valid=0`; UAV cạn pin do action hiện tại vẫn nhận đầy đủ reward của transition đó rồi `terminated=True`. Replay/actor/critic của MADDPG, MATD3 và MASAC dùng per-agent validity mask để không học từ các row hậu-terminal. Với U6/U9, horizon quan sát được là terminal và không bootstrap; legacy paper scenarios giữ truncation để tương thích reproduction cũ.
 
 ### 6.13 Previous recipient feedback
 
@@ -306,13 +311,13 @@ Sun et al. 2026 không còn thuộc nhóm ngoài-local ở lượt follow-up nà
 
 ## 9. Kiểm chứng
 
-- Lượt full verification follow-up sau hai fix mới: `python -m compileall -q src scripts tests`, `git diff --check`, rồi `pytest -q -rs` đạt **302 passed, 3 skipped trong 116.35 s**. Ba skip đều là test CUDA vì máy audit không có CUDA khả dụng.
+- Verification cuối sau action/lifecycle/network/Kaggle hardening phải được chạy lại từ đầu trước khi commit/push; số liệu verification cũ phía dưới không còn được dùng làm bằng chứng cho working tree hiện tại.
 - Development `run_all.py` đã chạy trọn train → evaluate → paper-comparison cho **MADDPG/MATD3/MASAC × U6/U9** bằng backend mặc định `uavnetsim`, deterministic CPU; cả sáu run đều tạo checkpoint, evaluation output và bốn figure so sánh.
 - Fuzz/invariant probe analytical chạy 12 seed × 120 bước cho mỗi U6/U9, kiểm tra finite observation/reward, map/altitude bounds, obstacle exclusion, finite-buffer conservation và zero topology cho UAV inactive; không phát hiện vi phạm invariant.
 - Regression bao phủ: confirmation tích lũy; endpoint-safe belief codec; fan-in reservation; depleted-recipient feedback; false-confirmation penalty; world/pair correction; per-agent depletion; mixed done dictionaries; previous-recipient feature; idle/active interference; contiguous closed-slot prefix; không có late work; byte-proportional reward.
 - Stress probe u9 với 9 intent đồng thời (2,250,000 B requested): có đủ 9 outcome, commit 129,024 B; hai lần chạy cùng seed cho kết quả giống hệt; sau busy slot và idle slot đều còn 0 pending completion, 0 MAC bookkeeping entry và 0 late event.
 - `git diff --check` và kiểm tra compile đều pass.
-- Không sửa file nào trong `src/uav_search/algorithms/`; replay terminal mask vẫn chỉ dùng `terminated`.
+- Algorithm layer hiện có per-agent validity masking và hybrid-action canonicalization; checkpoint U6/U9 cũ không được resume cho scientific run mới.
 - Push chỉ được thực hiện sau khi toàn bộ các cổng kiểm chứng trên xanh.
 
 ## 10. File thay đổi chính
@@ -337,4 +342,4 @@ Sun et al. 2026 không còn thuộc nhóm ngoài-local ở lượt follow-up nà
 
 Các thay đổi có sẵn lúc bắt đầu audit được giữ lại, không bị reset hoặc ghi đè.
 
-Lưu ý: một số file trong `docs/superpowers/plans/2026-09-09-*` vẫn ghi lại prototype cũ 5-D/10 MB. Chúng là nhật ký kế hoạch lịch sử, không phải contract runtime hiện tại; `README.md`, `docs/U6_PROVENANCE.md`, `docs/PAPER_FIDELITY.md`, spec hiện hành và báo cáo này mới mô tả kịch bản đang chạy.
+Lưu ý: toàn bộ plan/spec superseded đã được chuyển vào `docs/archive/`. Chúng chỉ là lịch sử thiết kế, không phải contract runtime. `README.md`, `docs/README.md`, `docs/U6_PROVENANCE.md`, `docs/PAPER_FIDELITY.md`, source code và tests hiện hành mới mô tả kịch bản đang chạy.

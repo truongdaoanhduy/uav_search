@@ -2,6 +2,12 @@
 set -euo pipefail
 
 PYTHON_BIN="${PYTHON:-python}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if ! command -v git >/dev/null 2>&1; then
+  echo "ERROR: git is required to install UavNetSim." >&2
+  exit 2
+fi
 UAVNETSIM_COMMIT="04daafb815eb377409b40b285574eeb62b9a8d58"
 UAVNETSIM_REPO="https://github.com/Zihao-Felix-Zhou/UavNetSim.git"
 

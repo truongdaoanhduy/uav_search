@@ -9,11 +9,15 @@ import torch
 
 from uav_search.algorithms.factory import make_algorithm
 from uav_search.envs.paper_env import PaperUAVEnv
+
 from .train import deterministic_rollout, resolve_device
 from .visualize import plot_trajectory
 
 
 def evaluate_checkpoint(checkpoint: str | Path, episodes: int = 5000, device: str = "auto", output_dir: str | Path | None = None) -> dict[str, Any]:
+    episodes = int(episodes)
+    if episodes < 1:
+        raise ValueError("episodes must be >= 1")
     checkpoint = Path(checkpoint)
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     cfg = payload["config"]
@@ -24,12 +28,12 @@ def evaluate_checkpoint(checkpoint: str | Path, episodes: int = 5000, device: st
     algo.load_checkpoint(payload)
     rows = []
     final_env = None
-    for ep in range(int(episodes)):
+    for ep in range(episodes):
         final_env, metrics = deterministic_rollout(algo, cfg, seed=200_000 + ep)
         rows.append({"episode": ep + 1, **metrics})
     numeric = [k for k, v in rows[0].items() if k != "episode" and isinstance(v, (int, float))]
     summary = {f"mean_{k}": sum(float(r[k]) for r in rows) / len(rows) for k in numeric}
-    summary.update({"algorithm": algorithm, "episodes": int(episodes)})
+    summary.update({"algorithm": algorithm, "episodes": episodes})
     if output_dir is not None:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)

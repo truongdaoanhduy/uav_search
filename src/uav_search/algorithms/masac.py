@@ -7,10 +7,12 @@ import numpy as np
 import torch
 from torch import nn
 
-from .base import BaseOffPolicy
-from .common import soft_update
-from .networks import CentralizedCritic, GaussianActor
+from uav_search.actions import PEER_CONTINUOUS_INDICES, canonicalize_peer_action_torch
 from uav_search.runtime import make_adam
+
+from .base import BaseOffPolicy
+from .common import masked_mean, soft_update
+from .networks import CentralizedCritic, GaussianActor
 
 
 class MASAC(BaseOffPolicy):
@@ -64,7 +66,24 @@ class MASAC(BaseOffPolicy):
         self.log_alpha = nn.Parameter(
             torch.full((self.n_agents,), float(np.log(alpha_init)), dtype=torch.float32, device=self.device)
         )
-        self.target_entropy = -float(self.action_dim)
+        if self.peer_mode:
+            self.entropy_action_mask = torch.zeros(
+                self.action_dim, dtype=torch.float32, device=self.device
+            )
+            self.entropy_action_mask[list(PEER_CONTINUOUS_INDICES)] = 1.0
+            automatic_target_entropy = -float(len(PEER_CONTINUOUS_INDICES))
+        else:
+            self.entropy_action_mask = None
+            automatic_target_entropy = -float(self.action_dim)
+        configured_target_entropy = a.get("target_entropy", "auto")
+        if isinstance(configured_target_entropy, str):
+            if configured_target_entropy.strip().lower() != "auto":
+                raise ValueError(
+                    "MASAC algorithm.target_entropy must be 'auto' or a numeric value"
+                )
+            self.target_entropy = automatic_target_entropy
+        else:
+            self.target_entropy = float(configured_target_entropy)
         self.alpha_opt = make_adam([self.log_alpha], lr=float(a.get("alpha_lr", actor_lr)), device=self.device)
 
     @property
@@ -83,7 +102,15 @@ class MASAC(BaseOffPolicy):
         actions = []
         logps = []
         for i in range(self.n_agents):
-            action_i, logp_i = actors[i].sample(obs[:, i, :], deterministic=deterministic)
+            action_i, logp_i = actors[i].sample(
+                obs[:, i, :],
+                deterministic=deterministic,
+                log_prob_mask=self.entropy_action_mask,
+            )
+            if self.peer_mode:
+                action_i = canonicalize_peer_action_torch(
+                    action_i, self.n_agents, straight_through=True
+                )
             if grad_agent is not None and i != grad_agent:
                 action_i = action_i.detach()
                 logp_i = logp_i.detach()
@@ -102,15 +129,17 @@ class MASAC(BaseOffPolicy):
         if len(self.replay) < self.batch_size:
             return {}
         b = self.replay.sample(self.batch_size, self.device, non_blocking=self.non_blocking)
-        go = self._global(b.obs)
-        gn = self._global(b.next_obs)
-        ja = b.actions.flatten(start_dim=1)
+        current_valid = b.valids.unsqueeze(-1)
+        next_valid = (b.valids * (1.0 - b.dones)).unsqueeze(-1)
+        go = self._global(b.obs * current_valid)
+        gn = self._global(b.next_obs * next_valid)
+        ja = (b.actions * current_valid).flatten(start_dim=1)
 
         with torch.no_grad(), self.autocast():
             next_actions, next_logps = self._sample_actions(
                 b.next_obs, target=True, deterministic=False
             )
-            next_joint = next_actions.flatten(start_dim=1)
+            next_joint = (next_actions * next_valid).flatten(start_dim=1)
             alpha_detached = self.alpha.detach()
             targets = []
             for i in range(self.n_agents):
@@ -128,17 +157,20 @@ class MASAC(BaseOffPolicy):
         target_q_means: list[float] = []
         td_errors: list[float] = []
         for i in range(self.n_agents):
+            valid = b.valids[:, i : i + 1]
+            if not bool(torch.any(valid > 0.0).item()):
+                continue
             with self.autocast():
                 q1 = self.critics1[i](go, ja)
                 q2 = self.critics2[i](go, ja)
-                l1 = torch.nn.functional.mse_loss(q1, targets[i])
-                l2 = torch.nn.functional.mse_loss(q2, targets[i])
+                l1 = masked_mean((q1 - targets[i]).pow(2), valid)
+                l2 = masked_mean((q2 - targets[i]).pow(2), valid)
             q1d = q1.detach().float()
             q2d = q2.detach().float()
             yd = targets[i].detach().float()
-            q_means.append(float((0.5 * (q1d + q2d)).mean().item()))
-            target_q_means.append(float(yd.mean().item()))
-            td_errors.append(float((0.5 * ((q1d - yd).abs() + (q2d - yd).abs())).mean().item()))
+            q_means.append(float(masked_mean(0.5 * (q1d + q2d), valid).item()))
+            target_q_means.append(float(masked_mean(yd, valid).item()))
+            td_errors.append(float(masked_mean(0.5 * ((q1d - yd).abs() + (q2d - yd).abs()), valid).item()))
             self.optimizer_step(l1, self.critic1_opts[i], self.critics1[i].parameters())
             self.optimizer_step(l2, self.critic2_opts[i], self.critics2[i].parameters())
             q1_losses.append(float(l1.detach().float().item()))
@@ -146,33 +178,37 @@ class MASAC(BaseOffPolicy):
 
         actor_losses: list[float] = []
         entropy_values: list[float] = []
-        alpha_logps: list[torch.Tensor] = []
+        alpha_losses: list[torch.Tensor] = []
         for i in range(self.n_agents):
+            valid = b.valids[:, i : i + 1]
+            if not bool(torch.any(valid > 0.0).item()):
+                continue
             with self.autocast():
                 actions_i, logps_i = self._sample_actions(
                     b.obs, target=False, deterministic=False, grad_agent=i
                 )
-                joint_i = actions_i.flatten(start_dim=1)
+                joint_i = (actions_i * current_valid).flatten(start_dim=1)
                 q_i = torch.minimum(
                     self.critics1[i](go, joint_i),
                     self.critics2[i](go, joint_i),
                 )
                 own_logp = logps_i[:, i, :]
-                loss = (self.alpha.detach()[i] * own_logp - q_i).mean()
+                loss = masked_mean(self.alpha.detach()[i] * own_logp - q_i, valid)
             self.optimizer_step(loss, self.actor_opts[i], self.actors[i].parameters())
             actor_losses.append(float(loss.detach().float().item()))
-            entropy_values.append(float((-own_logp.detach().float()).mean().item()))
-            alpha_logps.append(own_logp.detach())
+            entropy_values.append(float(masked_mean(-own_logp.detach().float(), valid).item()))
+            alpha_losses.append(
+                -self.log_alpha[i]
+                * masked_mean(own_logp.detach() + self.target_entropy, valid)
+            )
 
         # Ref. [44] Eq. (8): independent automatic temperature tuning per actor.
-        stacked_logp = torch.cat(alpha_logps, dim=1)
-        alpha_loss = -(
-            self.log_alpha * (stacked_logp + self.target_entropy).mean(dim=0)
-        ).mean()
-        self.alpha_opt.zero_grad(set_to_none=True)
-        alpha_loss.backward()
-        torch.nn.utils.clip_grad_norm_([self.log_alpha], 10.0)
-        self.alpha_opt.step()
+        alpha_loss = torch.stack(alpha_losses).mean() if alpha_losses else self.log_alpha.sum() * 0.0
+        if alpha_losses:
+            self.alpha_opt.zero_grad(set_to_none=True)
+            alpha_loss.backward()
+            torch.nn.utils.clip_grad_norm_([self.log_alpha], 10.0)
+            self.alpha_opt.step()
 
         self.finish_optimizer_steps()
         for i in range(self.n_agents):
@@ -199,6 +235,7 @@ class MASAC(BaseOffPolicy):
 
     def checkpoint(self) -> dict[str, Any]:
         return {
+            **self.checkpoint_metadata(),
             "algorithm": self.name,
             "config": self.cfg,
             "actors": self.actors.state_dict(),
@@ -219,6 +256,7 @@ class MASAC(BaseOffPolicy):
         }
 
     def load_checkpoint(self, p: dict[str, Any]) -> None:
+        self.validate_checkpoint(p)
         self.actors.load_state_dict(p["actors"])
         self.target_actors.load_state_dict(p.get("target_actors", p["actors"]))
         self.critics1.load_state_dict(p["critics1"])

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3, NumPy, Gymnasium, PyYAML, pytest.
 
-**Spec:** `docs/superpowers/specs/2026-09-05-paper-faithful-environment-design.md`
+**Spec:** `docs/archive/superpowers/specs/2026-09-05-paper-faithful-environment-design.md`
 
 ## Global Constraints
 

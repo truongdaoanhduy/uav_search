@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import importlib
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
+from uav_search.dependencies import UAVNETSIM_COMMIT, UAVNETSIM_VERSION
+
 from .models import communication_rate_bps, path_gain_linear
 
-
 GCS_NODE = -1
-UAVNETSIM_REPOSITORY = "https://github.com/Zihao-Felix-Zhou/UavNetSim.git"
-UAVNETSIM_COMMIT = "04daafb815eb377409b40b285574eeb62b9a8d58"
-UAVNETSIM_VERSION = "2.0.0"
 
 
 @dataclass(slots=True)
@@ -53,9 +51,17 @@ class TransmissionOutcome:
 @dataclass(slots=True)
 class NetworkStepResult:
     outcomes: list[TransmissionOutcome] = field(default_factory=list)
+    # Application bytes offered by the policy in this macro-step.
     attempted_bytes: int = 0
+    # Application payload bytes actually packetized/admitted to MAC. ``None``
+    # keeps older test doubles/backends compatible by treating offered bytes as
+    # admitted when they do not model packet admission separately.
+    admitted_bytes: int | None = None
     delivered_bytes: int = 0
+    # Delivery ratio over admitted/generated data bytes (PDR-like transport metric).
     byte_pdr: float = 0.0
+    # End-to-end service ratio over all policy-offered application bytes.
+    offered_delivery_ratio: float | None = None
     throughput_bps: float = 0.0
     mean_delay_s: float = 0.0
     phy_failures: int = 0
@@ -63,6 +69,16 @@ class NetworkStepResult:
     # excluded because only UAV batteries are part of the mission state.
     tx_energy_j: float = 0.0
     node_tx_energy_j: dict[int, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.admitted_bytes is None:
+            self.admitted_bytes = int(self.attempted_bytes)
+        if self.offered_delivery_ratio is None:
+            self.offered_delivery_ratio = (
+                float(self.delivered_bytes / self.attempted_bytes)
+                if self.attempted_bytes > 0
+                else 0.0
+            )
 
 
 class AnalyticalNetworkBackend:
@@ -209,7 +225,7 @@ class AnalyticalNetworkBackend:
         del step_index
         positions = np.asarray(positions, dtype=np.float64)
         gcs_position = np.asarray(gcs_position, dtype=np.float64)
-        n_agents = int(len(positions))
+        n_agents = len(positions)
         # A transmission action is the source of interference. Geometrically
         # present UAVs with their gate off are radio-silent and must not jam a
         # lone sender in the analytical ablation.
@@ -306,8 +322,10 @@ class AnalyticalNetworkBackend:
         return NetworkStepResult(
             outcomes=outcomes,
             attempted_bytes=attempted,
+            admitted_bytes=attempted,
             delivered_bytes=delivered,
             byte_pdr=float(delivered / attempted) if attempted else 0.0,
+            offered_delivery_ratio=float(delivered / attempted) if attempted else 0.0,
             throughput_bps=float(delivered * 8.0 / dt_s) if dt_s > 0 else 0.0,
             mean_delay_s=float(np.mean(delays)) if delays else 0.0,
             phy_failures=sum(1 for outcome in outcomes if outcome.requested_bytes > 0 and not outcome.success),
@@ -373,7 +391,7 @@ class _PolicyHopRoutingAdapter:
     ACK reception at the sender so CSMA/CA can perform its native retry logic.
     """
 
-    def __init__(self, node: "_RadioNode", packet_module: Any, config_module: Any):
+    def __init__(self, node: _RadioNode, packet_module: Any, config_module: Any):
         self.my_drone = node
         self.simulator = node.simulator
         self.env = node.env
@@ -656,7 +674,7 @@ class UavNetSimBackend:
         positions = np.asarray(positions, dtype=np.float64)
         gcs_position = np.asarray(gcs_position, dtype=np.float64)
         all_positions = np.vstack([positions, gcs_position])
-        n_agents = int(len(positions))
+        n_agents = len(positions)
         gcs_id = n_agents
         GainEstimate = self._modules["sionna_rt"].GainEstimate
 
@@ -838,7 +856,7 @@ class UavNetSimBackend:
         positions = np.asarray(positions, dtype=np.float64)
         gcs_position = np.asarray(gcs_position, dtype=np.float64)
         airspace = _PaperAirspace(obstacles)
-        n_agents = int(len(positions))
+        n_agents = len(positions)
         pair_rates = np.zeros((n_agents, n_agents), dtype=np.float64)
         gcs_rates = np.zeros(n_agents, dtype=np.float64)
         adjacency = np.zeros((n_agents, n_agents), dtype=np.int8)
@@ -879,12 +897,12 @@ class UavNetSimBackend:
         intents = [intent for intent in intents if int(intent.requested_bytes) > 0]
         attempted = int(sum(int(intent.requested_bytes) for intent in intents))
         if dt_s <= 0.0:
-            return NetworkStepResult(attempted_bytes=attempted)
+            return NetworkStepResult(attempted_bytes=attempted, admitted_bytes=0)
 
         DataPacket = self._modules["packet"].DataPacket
         positions = np.asarray(positions, dtype=np.float64)
         gcs_position = np.asarray(gcs_position, dtype=np.float64)
-        n_agents = int(len(positions))
+        n_agents = len(positions)
         gcs_id = n_agents
         simulator = self._update_episode_geometry(positions, gcs_position, obstacles)
         env = simulator.env
@@ -899,7 +917,6 @@ class UavNetSimBackend:
         metrics = simulator.metrics
         valid_intents: list[TransmissionIntent] = []
         prefailed: list[TransmissionOutcome] = []
-        airspace = simulator.airspace
         params = self._radio_parameters()
         noise_w = 10.0 ** (((-174.0 + 10.0 * np.log10(max(float(params["BANDWIDTH"]), 1.0)) + 7.0) - 30.0) / 10.0)
         for intent in intents:
@@ -936,11 +953,6 @@ class UavNetSimBackend:
                     tx_energy_j=tx_power * attempt_s,
                 ))
                 continue
-            gain = self._gain(
-                positions[sender], endpoint, airspace, gcs=(recipient == GCS_NODE)
-            )
-            sinr_db = 10.0 * np.log10(tx_power * gain / noise_w) if tx_power > 0.0 else -200.0
-            rate = float(params["BIT_RATE"]) if sinr_db >= float(params["SINR_THRESHOLD_DB"]) else 0.0
             # Inside the configured operational envelope, let UavNetSim see even
             # a PHY-poor attempt so MAC/ARQ airtime and radio energy stay native.
             valid_intents.append(intent)
@@ -956,8 +968,10 @@ class UavNetSimBackend:
             return NetworkStepResult(
                 outcomes=prefailed,
                 attempted_bytes=attempted,
+                admitted_bytes=0,
                 delivered_bytes=0,
                 byte_pdr=0.0,
+                offered_delivery_ratio=0.0,
                 throughput_bps=0.0,
                 mean_delay_s=0.0,
                 phy_failures=len(prefailed),
@@ -1216,11 +1230,14 @@ class UavNetSimBackend:
                     delivered_prefix_bytes=int(delivered_prefix_by_intent.get(key_meta, 0)),
                 ))
 
+        admitted_total = int(sum(int(payload_bytes) for _packet, _intent, _recipient, payload_bytes in packets.values()))
         return NetworkStepResult(
             outcomes=outcomes,
             attempted_bytes=attempted,
+            admitted_bytes=admitted_total,
             delivered_bytes=int(delivered_total),
-            byte_pdr=float(delivered_total / attempted) if attempted else 0.0,
+            byte_pdr=float(delivered_total / admitted_total) if admitted_total else 0.0,
+            offered_delivery_ratio=float(delivered_total / attempted) if attempted else 0.0,
             throughput_bps=float(delivered_total * 8.0 / dt_s),
             mean_delay_s=float(np.mean(delays)) if delays else 0.0,
             phy_failures=max(0, int(metrics.phy_failures) - phy_failures_before) + len(prefailed),

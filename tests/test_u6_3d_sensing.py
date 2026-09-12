@@ -13,7 +13,7 @@ def make_env(seed=44):
 
 def idle_actions(env):
     return {
-        agent: np.array([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
+        agent: np.array([0.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
         for agent in env.agents
     }
 

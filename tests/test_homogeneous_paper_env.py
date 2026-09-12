@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 
 from uav_search.config import load_config
-from uav_search.envs.paper_env import PaperUAVEnv, GCS_RECIPIENT
 from uav_search.envs.network_backends import NetworkLinkSnapshot
+from uav_search.envs.paper_env import GCS_RECIPIENT, PaperUAVEnv
 
 
 def make_env(seed=44):
@@ -14,7 +14,7 @@ def make_env(seed=44):
 
 
 def idle_actions(env):
-    return {a: np.array([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
+    return {a: np.array([0.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
 
 
 def force_belief_confirmation(env, target_idx=0, agent_idx=0):
@@ -117,9 +117,9 @@ def test_received_data_cannot_be_forwarded_again_in_same_rl_step():
 
     actions = idle_actions(env)
     # For UAV0, recipient scalar -1 maps to UAV1.
-    actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, 1.0, -1.0], dtype=np.float32)
+    actions["uav_0"] = np.array([0.0, 0.0, 0.0, 1.0, 1.0, -1.0], dtype=np.float32)
     # UAV1 tries to forward to the GCS in the same slot.
-    actions["uav_1"] = np.array([-1.0, 0.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32)
+    actions["uav_1"] = np.array([0.0, 0.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32)
 
     env.step(actions)
     assert env.report_buffers[0, 1] > 0
@@ -137,7 +137,7 @@ def test_gcs_delivery_requires_valid_paper_rate_and_reports_metric():
     env._refresh_links()
     env._enqueue_report(0, 0)
     actions = idle_actions(env)
-    actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32)
+    actions["uav_0"] = np.array([0.0, 0.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32)
 
     _, _, _, _, info = env.step(actions)
     assert info["bytes_transmitted"] > 0
@@ -180,7 +180,7 @@ def test_minimum_tx_power_is_a_real_transmission_not_old_zero_amount_encoding():
     env._enqueue_report(0, 0)
     actions = idle_actions(env)
     # Action coordinate 4 is RF power; -1 maps to the configured 0.1 W minimum.
-    actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, -1.0, 0.999], dtype=np.float32)
+    actions["uav_0"] = np.array([0.0, 0.0, 0.0, 1.0, -1.0, 0.999], dtype=np.float32)
 
     _, _, _, _, info = env.step(actions)
 
@@ -222,7 +222,7 @@ def test_peer_transmission_metrics_come_from_configured_backend():
     env._refresh_links()
     env._enqueue_report(0, 0)
     actions = idle_actions(env)
-    actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32)
+    actions["uav_0"] = np.array([0.0, 0.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32)
 
     _, _, _, _, info = env.step(actions)
 
@@ -318,7 +318,7 @@ def test_target_discovery_is_local_knowledge_until_report_reaches_peer():
     assert not env.target_known_by_agent[1, 0]
 
     actions = idle_actions(env)
-    actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, 1.0, -1.0], dtype=np.float32)
+    actions["uav_0"] = np.array([0.0, 0.0, 0.0, 1.0, 1.0, -1.0], dtype=np.float32)
     env.step(actions)
     assert env.target_known_by_agent[1, 0]
 
@@ -360,7 +360,7 @@ def test_bad_selected_link_is_counted_as_network_attempt_not_filtered_by_env():
     env._enqueue_report(0, 0)
     actions = idle_actions(env)
     # sender 0 -> UAV1 (recipient scalar -1) across an invalid/far link.
-    actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, 1.0, -1.0], dtype=np.float32)
+    actions["uav_0"] = np.array([0.0, 0.0, 0.0, 1.0, 1.0, -1.0], dtype=np.float32)
     _, _, _, _, info = env.step(actions)
     assert info["network_attempted_bytes"] > 0
     assert info["network_delivered_bytes"] == 0
@@ -468,7 +468,7 @@ def test_network_tx_energy_reduces_sender_battery_in_u6():
         env._enqueue_report(0, 0)
 
     tx_actions = idle_actions(tx_env)
-    tx_actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32)
+    tx_actions["uav_0"] = np.array([0.0, 0.0, 0.0, 1.0, 1.0, 0.999], dtype=np.float32)
     tx_env.step(tx_actions)
     idle_env.step(idle_actions(idle_env))
 
@@ -502,7 +502,7 @@ def test_uavnetsim_ack_energy_reduces_receiver_battery():
 
     tx_actions = idle_actions(tx_env)
     # Sender 0: gate on, minimum RF power, first recipient bin -> UAV 1.
-    tx_actions["uav_0"] = np.array([-1.0, 0.0, 0.0, 1.0, -1.0, -1.0], dtype=np.float32)
+    tx_actions["uav_0"] = np.array([0.0, 0.0, 0.0, 1.0, -1.0, -1.0], dtype=np.float32)
     tx_env.step(tx_actions)
     idle_env.step(idle_actions(idle_env))
 

@@ -7,13 +7,18 @@ uav_search/
 │   ├── algorithms/
 │   └── scenarios/
 ├── src/uav_search/
+│   ├── actions.py
 │   ├── config.py
+│   ├── dependencies.py
 │   ├── envs/
 │   ├── algorithms/
 │   └── runner/
 ├── scripts/
 ├── tests/
 ├── docs/
+│   ├── README.md       # authoritative docs index
+│   ├── legacy/         # legacy paper reproduction mapping
+│   └── archive/        # superseded plans/specs
 └── runs/              # generated, gitignored
 ```
 
@@ -25,6 +30,12 @@ uav_search/
 
 **`scenarios/*.yaml`** — swarm/target/obstacle counts. `f*_m*` files are paper-reproduction scenarios; `u6.yaml` and `u9.yaml` are the active homogeneous peer research scales and contain per-field provenance for altitude/sensing, GCS, DTN, RF, battery and calibration-required parameters.
 
+## `src/uav_search/` core helpers
+
+**`actions.py`** — authoritative U6/U9 hybrid-action codec. The peer action is `[a_x,a_y,a_z,tx_gate,tx_power,recipient]`; it canonicalizes hard gate/recipient semantics for replay/critics, provides straight-through torch canonicalization, and computes meaningful continuous-action saturation.
+
+**`dependencies.py`** — single source for the pinned UavNetSim repository/version/commit and SimPy version, plus strict runtime preflight used by Kaggle/local setup.
+
 ## `src/uav_search/envs/`
 
 **`models.py`** — pure physical/model functions: A2A communication rate, multi-rotor power, circle collision. Kept separate so radio/energy models can later be replaced independently.
@@ -33,7 +44,7 @@ uav_search/
 
 **`sensing.py`** — pure altitude-aware sensing primitives: continuous altitude/Pd/Pf interpolation, exact circular-footprint/absolute-cell intersection at the UAV's true XY pose, deterministic circle–cell coverage fraction, coverage-weighted log-odds Bayesian evidence, legacy discrete profile helpers, Bayesian occupancy update and binary entropy. Keeping these functions pure makes sensing tests deterministic and separates paper-derived sensor parameters from environment control logic.
 
-**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the paper-equation peer channel for regression/ablation while honoring each scenario's power-scaled reference envelope. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and keeps one SimPy/channel/node set alive per episode. UAV-to-UAV links retain native UavNetSim A2A propagation; any data/ACK pair involving the synthetic GCS uses the configured Al-Hourani-style urban A2G gain. MARL owns transmit gating, transmit power and immediate next-hop selection; communication consumes only data queued before the current sensing phase, and existing reports are forwarded before TTL expiry is checked. UavNetSim supplies CSMA/CA, PHY/channel delivery, native ACK/ARQ retries, delay/PDR/throughput and per-UAV radio TX energy; a commanded link rejected by the project candidate envelope still incurs sender probe-airtime energy rather than becoming a free no-op. Link metrics count all ACKed packets, while application state advances only through the longest ACKed contiguous payload prefix. RF power changes the operational candidate envelope around the 0.1 W reference radius and also affects PHY/energy. The environment computes both minimum- and maximum-power snapshots so the actor can distinguish links that already work at low power from links that require more power; the legacy topology diagnostic remains based on the maximum-power graph.
+**`network_backends.py`** — hybrid networking adapter. `AnalyticalNetworkBackend` preserves the paper-equation peer channel for regression/ablation while honoring each scenario's power-scaled reference envelope. `UavNetSimBackend` lazily imports the pinned UavNetSim stack and keeps one SimPy/channel/node set alive per episode. UAV-to-UAV links retain native UavNetSim A2A propagation; any data/ACK pair involving the synthetic GCS uses the configured Al-Hourani-style urban A2G gain. MARL owns transmit gating, transmit power and immediate next-hop selection; communication consumes only data queued before the current sensing phase, and existing reports are forwarded before TTL expiry is checked. UavNetSim supplies CSMA/CA, PHY/channel delivery, native ACK/ARQ retries, delay/PDR/throughput and per-UAV radio TX energy; a commanded link rejected by the project candidate envelope still incurs sender probe-airtime energy rather than becoming a free no-op. Packet-delivery metrics distinguish MAC-admitted/generated payload from application-offered load: `network_byte_pdr = delivered/admitted`, while `network_offered_delivery_ratio = delivered/offered`. Application state advances only through the longest ACKed contiguous payload prefix. RF power changes the operational candidate envelope around the 0.1 W reference radius and also affects PHY/energy. The environment computes both minimum- and maximum-power snapshots so the actor can distinguish links that already work at low power from links that require more power; the legacy topology diagnostic remains based on the maximum-power graph.
 
 ## `src/uav_search/algorithms/`
 
@@ -69,9 +80,11 @@ uav_search/
 
 **`train.py`** — train one algorithm/scenario.
 
-**`install_uavnetsim.sh`** — installs SimPy plus pinned UavNetSim commit `04daafb815eb377409b40b285574eeb62b9a8d58` with `--no-deps`; the fast `a2a` integration does not require Sionna RT.
+**`install_uavnetsim.sh`** — installs SimPy plus pinned UavNetSim commit `04daafb815eb377409b40b285574eeb62b9a8d58` with `--no-deps`; the active lightweight A2A/MAC/PHY integration does not execute the Sionna-RT path.
 
-**`run_all.py`** — run exactly the requested 3 algorithms across the current paper-reproduction scenario set.
+**`setup_kaggle.sh`** — clean Kaggle bootstrap: project dependencies → pinned UavNetSim → strict `check_system.py --require-uavnetsim` preflight.
+
+**`run_all.py`** — train/evaluate the three baselines over the active `u6`/`u9` research scenarios and build comparison figures.
 
 **`run_u6.py`** — run MASAC, MATD3 and MADDPG sequentially on the homogeneous `u6` joint search/networking scenario; default deterministic seed is 44.
 
@@ -86,7 +99,10 @@ uav_search/
 - `test_config.py` — paper constants/provenance/scenario merge.
 - `test_env.py` — legacy paper simulator determinism, output contract, target confirmation, episode length, physics monotonicity.
 - `test_homogeneous_paper_env.py` — homogeneous `u6` topology/action/report-routing behavior and seed determinism.
-- `test_homogeneous_algorithms.py` — verifies MASAC/MATD3/MADDPG accept the `u6` six-dimensional action and MATD3 smooths only continuous coordinates.
+- `test_homogeneous_algorithms.py` — verifies MASAC/MATD3/MADDPG accept the six-dimensional peer action and MATD3 smooths only continuous coordinates.
+- `test_action_semantics_regressions.py` — Cartesian-zero neutrality, hard gate/recipient canonicalization, straight-through gradients, replay action manifold, MASAC continuous-only entropy, and hybrid saturation diagnostics.
+- `test_terminal_lifecycle_regressions.py` — final-transition reward, finite-horizon termination, inactive-agent topology/safety exclusion, replay validity masks, and masked actor/critic updates.
+- `test_dependencies.py` — exact UavNetSim/SimPy reproducibility contract and preflight metadata.
 - `test_u6_3d_motion.py` — full-3D action, altitude initialization/bounds and legacy 2-D compatibility.
 - `test_u6_3d_sensing.py` — altitude profiles, Bayesian local sensing, receiver-only minimum-uncertainty fusion, cell-first true/false confirmation, no hidden-target leakage and sensing diagnostics.
 - `test_research_scenario_comm_gating.py` — active U6/U9 scope, successful/failed peer synchronization, no topology-only cache refresh, no global belief teleportation, and one-hop-per-macro-step knowledge propagation.

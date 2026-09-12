@@ -1,6 +1,6 @@
 # Paper Baselines Design
 
-> **Historical / superseded:** This design predates the 2026-09-06 paper-fidelity refactor. The active implementation now uses one Actor and centralized Critic per UAV (twin Critics for MATD3/MASAC); `docs/PAPER_MAPPING.md` is authoritative for current behavior.
+> **Historical / superseded:** This design predates the 2026-09-06 paper-fidelity refactor. The active implementation now uses one Actor and centralized Critic per UAV (twin Critics for MATD3/MASAC); `docs/legacy/PAPER_MAPPING.md` is authoritative for current behavior.
 
 
 ## Goal

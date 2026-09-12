@@ -22,11 +22,19 @@ Detailed raw optimizer updates remain available locally in `metrics/updates.csv`
 - `swarm/obstacle_hit_uavs`
 - `swarm/boundary_hit_uavs`
 - `swarm/broken_link_uavs`
-- `swarm/avg_comm_rate_mbps`
+- `swarm/avg_comm_rate_mbps` — backward-compatible alias for the max-power potential-link diagnostic, not realized goodput
 - `swarm/avg_broken_link_s`
 
 Counts such as `safety_distance_violation_uavs` are the number of distinct UAVs that entered that state at least once during the episode, not the number of repeated safety-distance violation events.
 Battery monitoring is intentionally only the swarm average plus the number of depleted UAVs.
+
+### Network semantics
+- `network/mean_potential_comm_rate_mbps` — max-controllable-power topology/link potential; useful for reachability diagnostics, not evidence that the policy transmitted.
+- `network/mean_selected_tx_rate_mbps` — rate of links actually selected by gate-on actions; zero when there is no selected TX.
+- `network/byte_pdr` — delivered payload bytes divided by MAC-admitted/generated payload bytes.
+- `network/offered_delivery_ratio` — delivered payload bytes divided by all application bytes offered by the policy; this can be lower than PDR when a 1 s slot cannot admit all offered bytes.
+- `network/throughput_bps` — episode delivered payload over elapsed mission time.
+
 
 ### Fixed-wing vs multi-rotor groups
 - `group/fixed_return_mean`

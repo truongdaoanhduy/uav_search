@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.10+, NumPy, Gymnasium/PettingZoo-style multi-agent dictionaries, pytest, Ruff-compatible formatting.
 
-**Spec:** `docs/superpowers/specs/2026-09-12-u6-u9-residual-semantics-hardening.md`
+**Spec:** `docs/archive/superpowers/specs/2026-09-12-u6-u9-residual-semantics-hardening.md`
 
 ## Global Constraints
 

@@ -12,7 +12,7 @@ def make_u6(seed=44):
 
 def idle_actions(env):
     return {
-        agent: np.array([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
+        agent: np.array([0.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
         for agent in env.agents
     }
 
@@ -45,7 +45,7 @@ def test_positive_vertical_action_changes_altitude_and_z_velocity():
     env.positions[0, 2] = 100.0
     env.velocities[0] = 0.0
     actions = idle_actions(env)
-    actions["uav_0"] = np.array([-1.0, 0.0, 1.0, -1.0, -1.0, -1.0], dtype=np.float32)
+    actions["uav_0"] = np.array([0.0, 0.0, 1.0, -1.0, -1.0, -1.0], dtype=np.float32)
 
     before_xy = env.positions[0, :2].copy()
     env.step(actions)
@@ -61,7 +61,7 @@ def test_vertical_motion_is_clipped_to_configured_altitude_bounds():
     env.positions[0, 2] = float(env.scenario["altitude_max_m"])
     env.velocities[0] = 0.0
     actions = idle_actions(env)
-    actions["uav_0"] = np.array([-1.0, 0.0, 1.0, -1.0, -1.0, -1.0], dtype=np.float32)
+    actions["uav_0"] = np.array([0.0, 0.0, 1.0, -1.0, -1.0, -1.0], dtype=np.float32)
 
     _, _, _, _, info = env.step(actions)
 

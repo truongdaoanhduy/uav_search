@@ -1,6 +1,6 @@
-from copy import deepcopy
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +10,6 @@ from uav_search.algorithms.factory import make_algorithm
 from uav_search.config import PAPER_SCENARIOS, load_config
 from uav_search.envs.models import communication_rate_bps
 from uav_search.envs.paper_env import PaperUAVEnv
-
 
 ROOT = Path(__file__).resolve().parents[1]
 

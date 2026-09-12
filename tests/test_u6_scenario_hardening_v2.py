@@ -16,7 +16,7 @@ def make_env(seed: int = 44) -> PaperUAVEnv:
 
 def idle_actions(env: PaperUAVEnv) -> dict[str, np.ndarray]:
     return {
-        name: np.asarray([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
+        name: np.asarray([0.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
         for name in env.agents
     }
 
@@ -108,8 +108,11 @@ def test_discrete_time_barrier_shield_filters_unsafe_motion_before_state_transit
     )
     env.velocities[:] = 0.0
     actions = idle_actions(env)
+    # Cartesian motion semantics: drive the pair directly toward one another so
+    # the unshielded 1 s step would reduce the 150 m separation below the
+    # configured 141.4 m safety distance.
     actions["uav_0"] = np.asarray([1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
-    actions["uav_1"] = np.asarray([1.0, 1.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
+    actions["uav_1"] = np.asarray([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
     before = env.positions.copy()
 
     _, _, _, _, info = env.step(actions)
@@ -133,7 +136,7 @@ def test_report_expiry_is_packet_level_loss_not_terminal_and_requires_fresh_evid
     assert env._enqueue_report(0, 0)
     env.step_count = 1
 
-    _, _, terminated, truncated, info = env.step(idle_actions(env))
+    _, _, terminated, _truncated, info = env.step(idle_actions(env))
 
     assert not any(terminated.values())
     assert info["termination_reason"] in {"running", "horizon"}

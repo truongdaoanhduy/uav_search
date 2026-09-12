@@ -11,8 +11,8 @@ from uav_search.runner.train import train_experiment
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Train the three requested continuous-action CTDE baselines "
-            "(MASAC, MATD3, MADDPG) on the homogeneous peer-u6 research scenario."
+            "Train the three requested CTDE baselines (MASAC, MATD3, MADDPG) "
+            "on the homogeneous peer-u6 research scenario using its hybrid action interface."
         )
     )
     parser.add_argument(

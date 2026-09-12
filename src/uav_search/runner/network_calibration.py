@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import csv
 import json
-import math
+from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 
@@ -50,7 +50,7 @@ class RandomWaypointCalibrationPolicy:
         for idx, agent in enumerate(env.agents):
             if not bool(env.uav_active[idx]):
                 actions[agent] = np.array(
-                    [-1.0, 0.0, 0.0, -1.0, self.tx_power_action, -1.0], dtype=np.float32
+                    [0.0, 0.0, 0.0, -1.0, self.tx_power_action, -1.0], dtype=np.float32
                 )
                 continue
             delta = self.waypoints[idx] - env.positions[idx]
@@ -58,21 +58,32 @@ class RandomWaypointCalibrationPolicy:
                 self.waypoints[idx, :2] = self.rng.uniform(0.05 * self.area, 0.95 * self.area, size=2)
                 self.waypoints[idx, 2] = float(self.rng.choice(self.altitude_levels))
                 delta = self.waypoints[idx] - env.positions[idx]
-            angle = math.atan2(float(delta[1]), float(delta[0]))
-            direction_action = float(np.clip(angle / math.pi, -1.0, 1.0))
-            # Damp the z controller instead of using sign(delta_z), which would
-            # repeatedly slam a velocity-integrating UAV into altitude bounds.
+            # Damped Cartesian velocity tracking matches the U6/U9 action
+            # contract [a_x, a_y, a_z]. It avoids the old polar-action artifact
+            # where zero actor output implied half horizontal thrust.
             vmax = float(env.paper["multirotor_speed_max_mps"])
             amax = float(env.paper["max_accel_mps2"])
-            desired_vz = float(np.clip(delta[2] / max(5.0 * env.dt, 1e-9), -0.5 * vmax, 0.5 * vmax))
+            horizon_s = max(5.0 * env.dt, 1e-9)
+            horizontal_distance = float(np.linalg.norm(delta[:2]))
+            if horizontal_distance > 1e-9:
+                desired_speed_xy = min(0.75 * vmax, horizontal_distance / horizon_s)
+                desired_vxy = delta[:2] / horizontal_distance * desired_speed_xy
+            else:
+                desired_vxy = np.zeros(2, dtype=np.float64)
+            accel_xy_action = np.clip(
+                (desired_vxy - env.velocities[idx, :2]) / max(amax * env.dt, 1e-9),
+                -1.0,
+                1.0,
+            )
+            desired_vz = float(np.clip(delta[2] / horizon_s, -0.5 * vmax, 0.5 * vmax))
             vertical_action = float(
                 np.clip((desired_vz - float(env.velocities[idx, 2])) / max(amax * env.dt, 1e-9), -1.0, 1.0)
             )
             recipient_action = float(self.rng.uniform(-1.0, 1.0))
             actions[agent] = np.array(
                 [
-                    1.0,
-                    direction_action,
+                    float(accel_xy_action[0]),
+                    float(accel_xy_action[1]),
                     vertical_action,
                     1.0 if self.traffic else -1.0,
                     self.tx_power_action,
@@ -96,6 +107,8 @@ def run_calibration_episode(
     scenario = str(scenario).lower()
     if scenario not in RESEARCH_SCENARIOS:
         raise ValueError(f"scenario must be one of {RESEARCH_SCENARIOS}; got {scenario!r}")
+    if int(steps) < 1:
+        raise ValueError("steps must be >= 1")
     cfg = deepcopy(load_config("masac", scenario))
     cfg["scenario"]["network_backend"] = "uavnetsim"
     cfg["scenario"]["peer_contact_range_m"] = float(contact_range_m)
@@ -113,7 +126,7 @@ def run_calibration_episode(
     connected_hop_count = 0
     neighbor_degree_sum = 0.0
     neighbor_degree_samples = 0
-    attempted = delivered = 0
+    attempted = admitted = delivered = 0
     delay_weighted_sum = 0.0
     phy_failures = 0
     tx_energy_j = 0.0
@@ -135,8 +148,10 @@ def run_calibration_episode(
         neighbor_degree_samples += int(env.n_agents)
 
         step_attempted = int(info["network_attempted_bytes"])
+        step_admitted = int(info.get("network_admitted_bytes", step_attempted))
         step_delivered = int(info["network_delivered_bytes"])
         attempted += step_attempted
+        admitted += step_admitted
         delivered += step_delivered
         delay_weighted_sum += float(info["network_mean_delay_s"]) * step_delivered
         phy_failures += int(info["network_phy_failures"])
@@ -168,9 +183,11 @@ def run_calibration_episode(
         "neighbor_degree_samples": int(neighbor_degree_samples),
         "mean_neighbor_degree": float(neighbor_degree_sum / neighbor_degree_samples) if neighbor_degree_samples else 0.0,
         "attempted_bytes": int(attempted),
+        "admitted_bytes": int(admitted),
         "delivered_bytes": int(delivered),
         "traffic_metrics_available": bool(attempted > 0),
-        "byte_pdr": float(delivered / attempted) if attempted else None,
+        "byte_pdr": float(delivered / admitted) if admitted else None,
+        "offered_delivery_ratio": float(delivered / attempted) if attempted else None,
         "throughput_bps": (
             float(delivered * 8.0 / max(executed * env.dt, 1e-12)) if attempted else None
         ),
@@ -199,6 +216,7 @@ def summarize_calibration(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]
         disconnected = sum(int(r["disconnected_node_steps"]) for r in group)
         node_steps = max(1, direct + multihop + disconnected)
         attempted = sum(int(r["attempted_bytes"]) for r in group)
+        admitted = sum(int(r.get("admitted_bytes", r["attempted_bytes"])) for r in group)
         delivered = sum(int(r["delivered_bytes"]) for r in group)
         hop_sum = sum(float(r["connected_hop_sum"]) for r in group)
         hop_count = sum(int(r["connected_hop_count"]) for r in group)
@@ -209,16 +227,18 @@ def summarize_calibration(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]
         summary.append({
             "scenario": scenario,
             "contact_range_m": float(contact_range),
-            "episodes": int(len(group)),
+            "episodes": len(group),
             "direct_fraction": float(direct / node_steps),
             "multihop_fraction": float(multihop / node_steps),
             "disconnected_fraction": float(disconnected / node_steps),
             "mean_gcs_hops": float(hop_sum / hop_count) if hop_count else 0.0,
             "mean_neighbor_degree": float(degree_sum / degree_count) if degree_count else 0.0,
             "attempted_bytes": int(attempted),
+            "admitted_bytes": int(admitted),
             "delivered_bytes": int(delivered),
             "traffic_metrics_available": bool(attempted > 0),
-            "byte_pdr": float(delivered / attempted) if attempted else None,
+            "byte_pdr": float(delivered / admitted) if admitted else None,
+            "offered_delivery_ratio": float(delivered / attempted) if attempted else None,
             "throughput_bps": (
                 float(delivered * 8.0 / total_time) if attempted and total_time > 0 else None
             ),

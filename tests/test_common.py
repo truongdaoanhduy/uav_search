@@ -2,7 +2,11 @@ import numpy as np
 import torch
 
 from uav_search.algorithms.common import ReplayBuffer, soft_update
-from uav_search.algorithms.networks import CentralizedCritic, DeterministicActor, GaussianActor
+from uav_search.algorithms.networks import (
+    CentralizedCritic,
+    DeterministicActor,
+    GaussianActor,
+)
 
 
 def test_replay_buffer_roundtrip_shapes():

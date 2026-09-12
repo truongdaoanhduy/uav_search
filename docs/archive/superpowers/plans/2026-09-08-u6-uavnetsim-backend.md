@@ -10,7 +10,7 @@
 
 **Tech Stack:** Python, NumPy, Gymnasium, pytest, SimPy, UavNetSim v2.0.0 pinned at commit `04daafb815eb377409b40b285574eeb62b9a8d58`.
 
-**Spec:** `docs/superpowers/specs/u6-hybrid-uavnetsim.md`
+**Spec:** `docs/archive/superpowers/specs/u6-hybrid-uavnetsim.md`
 
 ## Global Constraints
 

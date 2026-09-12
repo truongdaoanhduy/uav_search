@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -12,6 +11,18 @@ from uav_search.runner.network_calibration import (
     tx_power_to_action,
     write_calibration_outputs,
 )
+
+
+def test_calibration_rejects_nonpositive_steps_before_environment_setup(monkeypatch):
+    def fail_if_setup_starts(*_args, **_kwargs):
+        raise AssertionError("configuration loading must not start for invalid steps")
+
+    monkeypatch.setattr(
+        "uav_search.runner.network_calibration.load_config", fail_if_setup_starts
+    )
+
+    with pytest.raises(ValueError, match="steps must be >= 1"):
+        run_calibration_episode(contact_range_m=1000.0, seed=44, steps=0)
 
 
 def test_tx_power_to_action_maps_configured_interval():

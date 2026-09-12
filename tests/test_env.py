@@ -1,7 +1,11 @@
 import numpy as np
 
 from uav_search.config import load_config
-from uav_search.envs.models import circle_collision, communication_rate_bps, multirotor_power_w
+from uav_search.envs.models import (
+    circle_collision,
+    communication_rate_bps,
+    multirotor_power_w,
+)
 from uav_search.envs.paper_env import PaperUAVEnv
 
 
@@ -13,7 +17,7 @@ def test_seeded_reset_is_reproducible_and_shapes_match():
     a = make_env(seed=42)
     b = make_env(seed=42)
     oa, ia = a.reset(seed=42)
-    ob, ib = b.reset(seed=42)
+    ob, _ib = b.reset(seed=42)
     assert a.n_agents == 6
     assert len(oa) == 6
     assert a.action_dim == 2
@@ -29,7 +33,7 @@ def test_seeded_reset_is_reproducible_and_shapes_match():
 
 def test_step_returns_finite_parallel_outputs_and_metrics():
     env = make_env()
-    obs, _ = env.reset(seed=1)
+    _obs, _ = env.reset(seed=1)
     actions = {agent: np.zeros(2, dtype=np.float32) for agent in env.agents}
     nxt, rewards, terminated, truncated, info = env.step(actions)
     assert set(nxt) == set(env.agents)

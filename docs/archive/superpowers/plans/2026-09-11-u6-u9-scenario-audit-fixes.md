@@ -75,7 +75,7 @@ For the analytical ablation:
 **Files**
 - Modify: `docs/U6_PROVENANCE.md`
 - Modify: `docs/PAPER_FIDELITY.md`
-- Modify: `docs/superpowers/specs/2026-09-09-u6-power-dtn-persistent-network.md`
+- Modify: `docs/archive/superpowers/specs/2026-09-09-u6-power-dtn-persistent-network.md`
 - Modify: `src/uav_search/envs/paper_env.py` docstring
 
 Document cumulative confirmation, post-expiry freshness, byte-proportional delivery shaping, correction-aware safety reward, active-intent analytical interference, and closed-slot packet admission. Clarify that the environment returns a custom multi-agent tuple and is not a PettingZoo `ParallelEnv` implementation.

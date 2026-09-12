@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import importlib.util
+from copy import deepcopy
 
 import numpy as np
 import pytest
@@ -95,7 +95,6 @@ def test_peer_fan_in_reserves_receiver_report_capacity_once_per_slot(monkeypatch
 
     monkeypatch.setattr(env.network_backend, "transmit", full_ack)
     actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
-    actions[:, 0] = -1.0
     actions[:, 3] = -1.0
     actions[:, 4] = -1.0
     actions[:, 5] = -1.0

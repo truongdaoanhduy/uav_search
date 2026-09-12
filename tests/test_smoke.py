@@ -143,7 +143,7 @@ def test_replay_terminal_mask_bootstraps_across_time_limit_truncation():
 
     agents = ["uav_0", "uav_1"]
     terminated = {"uav_0": False, "uav_1": True}
-    truncated = {"uav_0": True, "uav_1": False}
+    _truncated = {"uav_0": True, "uav_1": False}
 
     mask = train_module._replay_terminal_mask(terminated, agents)
 

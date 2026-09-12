@@ -15,11 +15,14 @@ dependencies = [
   "pandas>=2.0",
   "matplotlib>=3.7",
   "wandb>=0.22.3",
+  "simpy==4.1.1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
-uavnetsim = ["simpy==4.1.1"]
+dev = [
+  "pytest>=8",
+  "ruff>=0.9",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -11,7 +11,7 @@
 
 **Tech Stack:** Python 3.10+, PyTorch, NumPy, Gymnasium, PyYAML, pandas, matplotlib, pytest, Weights & Biases.
 
-**Spec:** `docs/superpowers/specs/2026-09-04-gpu-wandb-training.md`
+**Spec:** `docs/archive/superpowers/specs/2026-09-04-gpu-wandb-training.md`
 
 ## Global Constraints
 - Do not change paper-facing scenario/reward/dynamics equations or training update ratio.

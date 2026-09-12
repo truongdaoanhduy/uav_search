@@ -17,14 +17,17 @@ def main() -> None:
     parser.add_argument("--scenario", choices=RESEARCH_SCENARIOS, default="u6")
     parser.add_argument(
         "--ranges", nargs="+", type=float, default=[1000.0, 1500.0, 2000.0, 2500.0],
-        help="Fixed peer/GCS one-hop candidate radii in meters; RF power does not enlarge these radii.",
+        help="Reference peer/GCS one-hop radii; transmit power scales the effective radius.",
     )
     parser.add_argument("--seed-start", type=int, default=44)
     parser.add_argument("--num-seeds", type=int, default=50)
     parser.add_argument("--steps", type=int, default=600)
     parser.add_argument(
         "--tx-power-w", type=float, default=0.1,
-        help="Fixed transmit power used by the optional --traffic policy; it affects PHY behavior only inside the selected candidate radius.",
+        help=(
+            "Fixed transmit power for optional --traffic; it affects PHY behavior and "
+            "scales range as (P/P_ref)^(1/n)."
+        ),
     )
     parser.add_argument("--traffic", action="store_true", help="Enable natural TargetReport traffic; topology-only is the default.")
     parser.add_argument("--output-dir", type=Path, default=None)

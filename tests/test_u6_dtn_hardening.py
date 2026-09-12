@@ -7,8 +7,12 @@ import pytest
 
 from uav_search.config import load_config
 from uav_search.envs.models import multirotor_power_w, segment_circle_intersects
-from uav_search.envs.network_backends import TransmissionIntent, UavNetSimBackend, create_network_backend
-from uav_search.envs.paper_env import GCS_RECIPIENT, PaperUAVEnv
+from uav_search.envs.network_backends import (
+    TransmissionIntent,
+    UavNetSimBackend,
+    create_network_backend,
+)
+from uav_search.envs.paper_env import PaperUAVEnv
 
 
 def make_env(seed: int = 44) -> PaperUAVEnv:
@@ -18,7 +22,7 @@ def make_env(seed: int = 44) -> PaperUAVEnv:
 
 
 def idle_actions(env: PaperUAVEnv):
-    return {a: np.array([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
+    return {a: np.array([0.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32) for a in env.agents}
 
 
 def test_u6_literature_backed_report_buffer_lifetime_and_power_defaults():

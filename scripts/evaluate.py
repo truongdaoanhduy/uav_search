@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+
 from uav_search.runner.evaluate import evaluate_checkpoint
 
 p = argparse.ArgumentParser(description="Evaluate a trained paper baseline.")

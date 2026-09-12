@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import torch
 from torch import nn
 
@@ -43,7 +41,12 @@ class GaussianActor(nn.Module):
         log_std = self.log_std(h).clamp(self.log_std_min, self.log_std_max)
         return mean, log_std
 
-    def sample(self, obs: torch.Tensor, deterministic: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+    def sample(
+        self,
+        obs: torch.Tensor,
+        deterministic: bool = False,
+        log_prob_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         mean, log_std = self(obs)
         std = log_std.exp()
         dist = torch.distributions.Normal(mean, std)
@@ -54,6 +57,8 @@ class GaussianActor(nn.Module):
         else:
             # SAC tanh correction.
             logp = dist.log_prob(raw) - torch.log(1.0 - action.pow(2) + 1e-6)
+            if log_prob_mask is not None:
+                logp = logp * log_prob_mask.to(device=logp.device, dtype=logp.dtype)
             logp = logp.sum(dim=-1, keepdim=True)
         return action, logp
 

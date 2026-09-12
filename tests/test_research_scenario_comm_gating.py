@@ -5,9 +5,12 @@ import numpy as np
 import pytest
 
 from uav_search.config import ACTIVE_SCENARIOS, RESEARCH_SCENARIOS, load_config
-from uav_search.envs.paper_env import PaperUAVEnv
-from uav_search.envs.sensing import decode_belief_probabilities, encode_belief_probabilities
 from uav_search.envs.network_backends import NetworkStepResult, TransmissionOutcome
+from uav_search.envs.paper_env import PaperUAVEnv
+from uav_search.envs.sensing import (
+    decode_belief_probabilities,
+    encode_belief_probabilities,
+)
 
 
 def make_env(scenario: str = "u6", seed: int = 101) -> PaperUAVEnv:

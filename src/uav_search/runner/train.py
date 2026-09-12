@@ -19,10 +19,14 @@ from uav_search.runtime import configure_runtime, resolve_device
 
 from .diagnostics import diagnose_episode
 from .logging import RunLogger
-from .progress import format_episode_progress, format_startup_summary, should_report_episode
+from .progress import (
+    format_episode_progress,
+    format_startup_summary,
+    should_report_episode,
+)
 from .termination import episode_finished
 from .visualize import plot_simulation_scenario, plot_training_curves, plot_trajectory
-from .wandb_logger import WandbLogger
+from .wandb_logger import WandbLogger, episode_axis_metrics
 
 
 def set_global_seed(seed: int) -> None:
@@ -49,6 +53,13 @@ def _replay_terminal_mask(
     return np.asarray([float(terminated[a]) for a in agents], dtype=np.float32)
 
 
+def _replay_valid_mask(env: PaperUAVEnv) -> np.ndarray:
+    """Mark agents whose action/reward transition is valid at step start."""
+    if bool(getattr(env, "peer_mode", False)):
+        return np.asarray(env.uav_active, dtype=np.float32).copy()
+    return np.ones(int(env.n_agents), dtype=np.float32)
+
+
 def _sensing_metrics_from_info(info: dict[str, Any]) -> dict[str, float | int]:
     """Extract episode-level 3D sensing diagnostics with legacy-safe defaults."""
     return {
@@ -66,6 +77,25 @@ def _sensing_metrics_from_info(info: dict[str, Any]) -> dict[str, float | int]:
     }
 
 
+def _network_episode_metrics_from_info(
+    info: dict[str, Any], elapsed_s: float
+) -> dict[str, float]:
+    """Derive interval metrics from episode-cumulative network byte counters."""
+    attempted = int(info.get("total_network_attempted_bytes", 0))
+    admitted = int(info.get("total_network_admitted_bytes", attempted))
+    delivered = int(info.get("total_network_delivered_bytes", 0))
+    duration = max(float(elapsed_s), 0.0)
+    return {
+        "network_byte_pdr": float(delivered / admitted) if admitted > 0 else 0.0,
+        "network_offered_delivery_ratio": (
+            float(delivered / attempted) if attempted > 0 else 0.0
+        ),
+        "network_throughput_bps": (
+            float(delivered * 8.0 / duration) if duration > 0.0 else 0.0
+        ),
+    }
+
+
 def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUAVEnv, dict[str, float]]:
     env = PaperUAVEnv(cfg, seed=seed)
     obs_dict, _ = env.reset(seed=seed)
@@ -73,17 +103,24 @@ def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUA
     returns = np.zeros(env.n_agents, dtype=np.float64)
     info: dict[str, Any] = {}
     comm_rates: list[float] = []
+    selected_tx_rates: list[float] = []
     saturations: list[float] = []
+    executed_steps = 0
     for _ in range(env.max_steps):
         action = algo.act(obs, explore=False)
         action_dict = {a: action[i] for i, a in enumerate(env.agents)}
         next_dict, reward_dict, terminated, truncated, info = env.step(action_dict)
+        executed_steps += 1
         returns += np.asarray([reward_dict[a] for a in env.agents], dtype=np.float64)
         comm_rates.append(float(info["mean_comm_rate_mbps"]))
+        selected_tx_rates.append(float(info.get("mean_selected_tx_rate_mbps", 0.0)))
         saturations.append(float(info["action_saturation"]))
         obs = _obs_array(next_dict, env.agents)
         if episode_finished(terminated, truncated):
             break
+    network_metrics = _network_episode_metrics_from_info(
+        info, elapsed_s=executed_steps * float(getattr(env, "dt", 1.0))
+    )
     metrics = {
         "return_mean": float(returns.mean()),
         "return_sum": float(returns.sum()),
@@ -100,13 +137,16 @@ def deterministic_rollout(algo, cfg: dict[str, Any], seed: int) -> tuple[PaperUA
         "depleted_uavs": int(info.get("depleted_uavs", 0)),
         "avg_battery_pct": float(info.get("avg_battery_pct", 100.0)),
         "mean_comm_rate_mbps": float(np.mean(comm_rates)) if comm_rates else 0.0,
+        "mean_potential_comm_rate_mbps": float(np.mean(comm_rates)) if comm_rates else 0.0,
+        "mean_selected_tx_rate_mbps": float(np.mean(selected_tx_rates)) if selected_tx_rates else 0.0,
         "action_saturation": float(np.mean(saturations)) if saturations else 0.0,
         "mission_delivery_rate": float(info.get("mission_delivery_rate", 0.0)),
         "reports_delivered": int(info.get("reports_delivered", 0)),
         "expired_reports": int(info.get("expired_reports", 0)),
         "queue_bytes_total": int(info.get("queue_bytes_total", 0)),
-        "network_byte_pdr": float(info.get("network_byte_pdr", 0.0)),
-        "network_throughput_bps": float(info.get("network_throughput_bps", 0.0)),
+        "network_byte_pdr": network_metrics["network_byte_pdr"],
+        "network_offered_delivery_ratio": network_metrics["network_offered_delivery_ratio"],
+        "network_throughput_bps": network_metrics["network_throughput_bps"],
         "direct_gcs_uavs": int(info.get("direct_gcs_uavs", 0)),
         "multihop_gcs_uavs": int(info.get("multihop_gcs_uavs", 0)),
         "disconnected_gcs_uavs": int(info.get("disconnected_gcs_uavs", 0)),
@@ -136,6 +176,10 @@ def train_experiment(
 ) -> Path:
     if int(progress_every) < 1:
         raise ValueError("progress_every must be >= 1")
+    if episodes is not None and int(episodes) < 1:
+        raise ValueError("episodes must be >= 1")
+    if steps is not None and int(steps) < 1:
+        raise ValueError("steps must be >= 1")
 
     cfg = deepcopy(load_config(algorithm, scenario))
     cfg["runtime"]["seed"] = int(seed)
@@ -214,6 +258,7 @@ def train_experiment(
             obs = _obs_array(obs_dict, env.agents)
             ep_returns = np.zeros(env.n_agents, dtype=np.float64)
             comm_rates: list[float] = []
+            selected_tx_rates: list[float] = []
             saturations: list[float] = []
             reward_component_sums = {
                 "communication": 0.0, "energy": 0.0, "safety": 0.0, "task": 0.0
@@ -227,16 +272,20 @@ def train_experiment(
                 else:
                     action = algo.act(obs, explore=True)
                 action_dict = {a: action[i] for i, a in enumerate(env.agents)}
+                valids = _replay_valid_mask(env)
                 next_dict, reward_dict, terminated, truncated, last_info = env.step(action_dict)
                 next_obs = _obs_array(next_dict, env.agents)
                 rewards = np.asarray([reward_dict[a] for a in env.agents], dtype=np.float32)
-                # Truncation stops collection below but must not suppress Q bootstrapping.
+                # Only true MDP termination cuts Q bootstrapping. Agent validity is
+                # captured before the step so the transition that depletes a UAV is
+                # still learned exactly once, while later post-terminal rows are masked.
                 dones = _replay_terminal_mask(terminated, env.agents)
-                algo.store(obs, action, rewards, next_obs, dones)
+                algo.store(obs, action, rewards, next_obs, dones, valids=valids)
                 ep_returns += rewards
                 obs = next_obs
                 global_step += 1
                 comm_rates.append(float(last_info["mean_comm_rate_mbps"]))
+                selected_tx_rates.append(float(last_info.get("mean_selected_tx_rate_mbps", 0.0)))
                 saturations.append(float(last_info["action_saturation"]))
                 step_components = last_info.get("reward_components_sum", {})
                 for component in ("communication", "energy", "safety", "task"):
@@ -263,6 +312,9 @@ def train_experiment(
             wall_time_sec = time.perf_counter() - train_started
             episode_updates = update_index - episode_update_start
             episode_steps = int(current_context.get("step", 0))
+            network_metrics = _network_episode_metrics_from_info(
+                last_info, elapsed_s=episode_steps * float(env.dt)
+            )
             ep_metrics: dict[str, Any] = {
                 "episode": episode,
                 "global_step": global_step,
@@ -287,12 +339,15 @@ def train_experiment(
                 "avg_battery_pct": float(last_info.get("avg_battery_pct", 100.0)),
                 "action_saturation": float(np.mean(saturations)) if saturations else 0.0,
                 "mean_comm_rate_mbps": float(np.mean(comm_rates)) if comm_rates else 0.0,
+                "mean_potential_comm_rate_mbps": float(np.mean(comm_rates)) if comm_rates else 0.0,
+                "mean_selected_tx_rate_mbps": float(np.mean(selected_tx_rates)) if selected_tx_rates else 0.0,
                 "mission_delivery_rate": float(last_info.get("mission_delivery_rate", 0.0)),
                 "reports_delivered": int(last_info.get("reports_delivered", 0)),
                 "expired_reports": int(last_info.get("expired_reports", 0)),
                 "queue_bytes_total": int(last_info.get("queue_bytes_total", 0)),
-                "network_byte_pdr": float(last_info.get("network_byte_pdr", 0.0)),
-                "network_throughput_bps": float(last_info.get("network_throughput_bps", 0.0)),
+                "network_byte_pdr": network_metrics["network_byte_pdr"],
+                "network_offered_delivery_ratio": network_metrics["network_offered_delivery_ratio"],
+                "network_throughput_bps": network_metrics["network_throughput_bps"],
                 "direct_gcs_uavs": int(last_info.get("direct_gcs_uavs", 0)),
                 "multihop_gcs_uavs": int(last_info.get("multihop_gcs_uavs", 0)),
                 "disconnected_gcs_uavs": int(last_info.get("disconnected_gcs_uavs", 0)),
@@ -359,7 +414,7 @@ def train_experiment(
             # Keep W&B compact: one aggregate payload per episode. Detailed raw
             # optimizer updates remain in local CSV and are mirrored only every N updates.
             wandb_episode = {
-                "paper/episode": episode,
+                **episode_axis_metrics(episode),
                 # Keep the historical team-total key for backwards-compatible
                 # dashboards, but expose a swarm-size-invariant primary reward
                 # for comparisons between U6 and U9.
@@ -369,7 +424,6 @@ def train_experiment(
                 "paper/search_rate": ep_metrics["search_rate"],
                 "paper/energy_consumption_pct": ep_metrics["energy_consumption_pct"],
                 "paper/broken_link_duration_s": ep_metrics["mean_broken_link_s"],
-                "swarm/episode": episode,
                 "swarm/avg_battery_pct": ep_metrics["avg_battery_pct"],
                 "swarm/battery_capacity_j": ep_metrics["battery_capacity_j"],
                 "swarm/mean_altitude_m": ep_metrics["mean_altitude_m"],
@@ -381,11 +435,14 @@ def train_experiment(
                 "swarm/boundary_hit_uavs": ep_metrics["boundary_hit_uavs"],
                 "swarm/broken_link_uavs": ep_metrics["broken_link_uavs"],
                 "swarm/avg_comm_rate_mbps": ep_metrics["mean_comm_rate_mbps"],
+                "network/mean_potential_comm_rate_mbps": ep_metrics["mean_potential_comm_rate_mbps"],
+                "network/mean_selected_tx_rate_mbps": ep_metrics["mean_selected_tx_rate_mbps"],
                 "swarm/avg_broken_link_s": ep_metrics["mean_broken_link_s"],
                 "mission/delivery_rate": ep_metrics["mission_delivery_rate"],
                 "mission/reports_delivered": ep_metrics["reports_delivered"],
                 "mission/expired_reports": ep_metrics["expired_reports"],
                 "network/byte_pdr": ep_metrics["network_byte_pdr"],
+                "network/offered_delivery_ratio": ep_metrics["network_offered_delivery_ratio"],
                 "network/throughput_bps": ep_metrics["network_throughput_bps"],
                 "network/direct_gcs_uavs": ep_metrics["direct_gcs_uavs"],
                 "network/multihop_gcs_uavs": ep_metrics["multihop_gcs_uavs"],
@@ -400,20 +457,16 @@ def train_experiment(
                 "sensing/targets_confirmed_total": ep_metrics["targets_confirmed_total"],
                 "sensing/false_confirmations_total": ep_metrics["false_confirmations_total"],
                 "sensing/confirmed_cells_total": ep_metrics["confirmed_cells_total"],
-                "group/episode": episode,
                 "group/fixed_return_mean": ep_metrics["fixed_return_mean"],
                 "group/rotor_return_mean": ep_metrics["rotor_return_mean"],
-                "reward/episode": episode,
                 "reward/task": ep_metrics["reward_task_sum"],
                 "reward/communication": ep_metrics["reward_communication_sum"],
                 "reward/energy": ep_metrics["reward_energy_sum"],
                 "reward/safety": ep_metrics["reward_safety_sum"],
-                "rl/episode": episode,
                 "rl/actor_loss": ep_metrics["actor_loss"],
                 "rl/critic_loss": ep_metrics["critic_loss"],
                 "rl/q_mean": ep_metrics["q_mean"],
                 "rl/td_error": ep_metrics["td_error_abs_mean"],
-                "performance/episode": episode,
                 "performance/env_steps_per_sec": ep_metrics["env_steps_per_sec"],
                 "performance/updates_per_sec": ep_metrics["updates_per_sec"],
                 "performance/episode_sec": ep_metrics["episode_sec"],
@@ -532,7 +585,7 @@ def train_experiment(
             crash_path = logger.checkpoint_dir / "crash.pt"
             algo.save(crash_path)
             wb.log_model(crash_path, f"{algorithm}-{scenario}-crash", aliases=["crash"])
-        except BaseException as save_exc:
+        except BaseException as save_exc:  # noqa: BLE001 - preserve the original crash
             save_payload = logger.log_error(
                 save_exc,
                 {**current_context, "during": "crash_checkpoint"},

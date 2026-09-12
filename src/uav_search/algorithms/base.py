@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import torch
 
+from uav_search.actions import (
+    CHECKPOINT_FORMAT_VERSION,
+    LEGACY_ACTION_SCHEMA,
+    PEER_ACTION_SCHEMA,
+    canonicalize_peer_action_numpy,
+)
 from uav_search.runtime import autocast_context, configure_runtime, make_grad_scaler
+
 from .common import ReplayBuffer, capacity_with_memory_budget
 
 
@@ -24,6 +32,8 @@ class BaseOffPolicy:
         self.n_agents = env.n_agents
         self.obs_dim = env.obs_dim
         self.action_dim = env.action_dim
+        self.peer_mode = bool(getattr(env, "peer_mode", False))
+        self.action_schema = PEER_ACTION_SCHEMA if self.peer_mode else LEGACY_ACTION_SCHEMA
         self.agent_types = ["fixed" if int(t) == 0 else "rotor" for t in env.agent_types]
         self.fixed_indices = [i for i, t in enumerate(self.agent_types) if t == "fixed"]
         self.rotor_indices = [i for i, t in enumerate(self.agent_types) if t == "rotor"]
@@ -63,8 +73,10 @@ class BaseOffPolicy:
         self.non_blocking = self.runtime_profile.non_blocking
         self.update_step = 0
 
-    def store(self, obs, actions, rewards, next_obs, dones) -> None:
-        self.replay.add(obs, actions, rewards, next_obs, dones)
+    def store(self, obs, actions, rewards, next_obs, dones, valids=None) -> None:
+        if self.peer_mode:
+            actions = canonicalize_peer_action_numpy(actions, self.n_agents)
+        self.replay.add(obs, actions, rewards, next_obs, dones, valids=valids)
 
     @staticmethod
     def _global(obs: torch.Tensor) -> torch.Tensor:
@@ -95,6 +107,46 @@ class BaseOffPolicy:
     def finish_optimizer_steps(self) -> None:
         if self.scaler.is_enabled():
             self.scaler.update()
+
+    def checkpoint_metadata(self) -> dict[str, Any]:
+        """Metadata required to prevent shape-compatible semantic checkpoint misuse."""
+        return {
+            "checkpoint_format_version": CHECKPOINT_FORMAT_VERSION,
+            "action_schema": self.action_schema,
+            "n_agents": self.n_agents,
+            "obs_dim": self.obs_dim,
+            "action_dim": self.action_dim,
+        }
+
+    def validate_checkpoint(self, payload: dict[str, Any]) -> None:
+        expected_algorithm = getattr(self, "name", None)
+        stored_algorithm = payload.get("algorithm")
+        if expected_algorithm is not None and stored_algorithm is not None and stored_algorithm != expected_algorithm:
+            raise ValueError(
+                f"Checkpoint algorithm {stored_algorithm!r} is incompatible with {expected_algorithm!r}."
+            )
+
+        stored_schema = payload.get("action_schema")
+        if self.peer_mode and stored_schema != self.action_schema:
+            raise ValueError(
+                "Checkpoint action schema is incompatible with the current U6/U9 Cartesian hybrid action contract. "
+                f"Expected {self.action_schema!r}, got {stored_schema!r}. "
+                "Pre-Cartesian U6/U9 checkpoints must be retrained rather than resumed/evaluated."
+            )
+        if not self.peer_mode and stored_schema is not None and stored_schema != self.action_schema:
+            raise ValueError(
+                f"Checkpoint action schema {stored_schema!r} is incompatible with {self.action_schema!r}."
+            )
+
+        for key, expected in (
+            ("n_agents", self.n_agents),
+            ("obs_dim", self.obs_dim),
+            ("action_dim", self.action_dim),
+        ):
+            if key in payload and int(payload[key]) != int(expected):
+                raise ValueError(
+                    f"Checkpoint {key}={payload[key]!r} is incompatible with current {key}={expected}."
+                )
 
     def save(self, path: str | Path) -> None:
         path = Path(path)

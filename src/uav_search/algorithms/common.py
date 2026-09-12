@@ -13,18 +13,27 @@ class Batch:
     rewards: torch.Tensor
     next_obs: torch.Tensor
     dones: torch.Tensor
+    valids: torch.Tensor
 
 
 def replay_bytes_per_transition(n_agents: int, obs_dim: int, action_dim: int) -> int:
     """Bytes stored for one float32 joint transition.
 
     A transition contains obs + next_obs, joint actions, per-agent rewards,
-    and per-agent done flags. This helper makes the large-swarm memory cost
+    per-agent done flags, and per-agent transition-valid flags. This helper makes the large-swarm memory cost
     explicit without changing the data stored by the baseline algorithms.
     """
     n = int(n_agents)
-    scalars = 2 * n * int(obs_dim) + n * int(action_dim) + 2 * n
+    scalars = 2 * n * int(obs_dim) + n * int(action_dim) + 3 * n
     return 4 * scalars
+
+
+def masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Mean over valid rows only; callers skip optimization when mask is empty."""
+    weights = mask.to(dtype=values.dtype)
+    while weights.ndim < values.ndim:
+        weights = weights.unsqueeze(-1)
+    return (values * weights).sum() / weights.sum().clamp_min(1.0)
 
 
 def capacity_with_memory_budget(
@@ -79,6 +88,7 @@ class ReplayBuffer:
         self.rewards = alloc((self.capacity, self.n_agents))
         self.next_obs = alloc((self.capacity, self.n_agents, self.obs_dim))
         self.dones = alloc((self.capacity, self.n_agents))
+        self.valids = alloc((self.capacity, self.n_agents))
         self.ptr = 0
         self.size = 0
 
@@ -90,13 +100,16 @@ class ReplayBuffer:
         src = torch.as_tensor(value, dtype=torch.float32, device="cpu")
         dst.copy_(src, non_blocking=False)
 
-    def add(self, obs, actions, rewards, next_obs, dones) -> None:
+    def add(self, obs, actions, rewards, next_obs, dones, valids=None) -> None:
         i = self.ptr
         self._copy_row(self.obs[i], obs)
         self._copy_row(self.actions[i], actions)
         self._copy_row(self.rewards[i], rewards)
         self._copy_row(self.next_obs[i], next_obs)
         self._copy_row(self.dones[i], dones)
+        if valids is None:
+            valids = np.ones(self.n_agents, dtype=np.float32)
+        self._copy_row(self.valids[i], valids)
         self.ptr = (self.ptr + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
 
@@ -117,7 +130,14 @@ class ReplayBuffer:
                 return batch
             return batch.to(device=device, non_blocking=bool(non_blocking))
 
-        return Batch(take(self.obs), take(self.actions), take(self.rewards), take(self.next_obs), take(self.dones))
+        return Batch(
+            take(self.obs),
+            take(self.actions),
+            take(self.rewards),
+            take(self.next_obs),
+            take(self.dones),
+            take(self.valids),
+        )
 
 
 def hard_update(target: torch.nn.Module, source: torch.nn.Module) -> None:

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from contextlib import nullcontext
 import os
 import platform
 import sys
+from collections.abc import Iterable
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
-from typing import Iterable
 
 import torch
 

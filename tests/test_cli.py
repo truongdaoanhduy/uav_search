@@ -1,7 +1,6 @@
-from pathlib import Path
 import subprocess
 import sys
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,6 +52,19 @@ def test_cli_defaults_to_deterministic_and_progress_100():
         assert "100 episodes" in text
 
 
+def test_network_calibration_help_describes_power_scaled_contact_range():
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "calibrate_u6_network.py"), "--help"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "scales the effective radius" in proc.stdout
+    assert "does not enlarge these radii" not in proc.stdout
+
+
 def test_check_system_describes_deterministic_paper_default():
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "check_system.py"), "--device", "cpu"],
@@ -65,6 +77,7 @@ def test_check_system_describes_deterministic_paper_default():
 def test_seed_defaults_are_44_across_generic_training_entrypoints():
     import importlib.util
     import inspect
+
     import uav_search.runner.train as train_module
 
     def load_script(name):
@@ -82,3 +95,17 @@ def test_seed_defaults_are_44_across_generic_training_entrypoints():
     assert train_args.seed == 44
     assert run_all_args.seed == 44
     assert inspect.signature(train_module.train_experiment).parameters["seed"].default == 44
+
+
+def test_check_system_exposes_strict_uavnetsim_preflight_flag():
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "check_system.py"), "--help"],
+        cwd=ROOT, text=True, capture_output=True, check=True,
+    )
+    assert "--require-uavnetsim" in proc.stdout
+
+
+def test_kaggle_setup_script_is_present_and_shell_valid():
+    script = ROOT / "scripts" / "setup_kaggle.sh"
+    assert script.exists()
+    subprocess.run(["bash", "-n", str(script)], cwd=ROOT, check=True)

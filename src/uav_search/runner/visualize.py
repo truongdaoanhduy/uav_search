@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Iterable, Mapping
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -124,7 +125,7 @@ def plot_simulation_scenario(
 ) -> Path:
     """Fig. 6-style software scenario sanity plot (not a physical experiment)."""
     positions = np.asarray(positions)
-    names = list(agent_names)
+    _ = list(agent_names)  # Retained in the public plotting signature for compatibility.
     types = list(agent_types)
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)

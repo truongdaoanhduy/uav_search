@@ -1,6 +1,6 @@
 # Paper Baselines Implementation Plan
 
-> **Historical plan:** Later paper-fidelity work superseded architecture details in this plan. See `docs/PAPER_MAPPING.md` and `docs/PAPER_FIDELITY.md` for current behavior.
+> **Historical plan:** Later paper-fidelity work superseded architecture details in this plan. See `docs/legacy/PAPER_MAPPING.md` and `docs/PAPER_FIDELITY.md` for current behavior.
 
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -11,7 +11,7 @@
 
 **Tech Stack:** Python 3.10+, PyTorch, NumPy, Gymnasium spaces, PyYAML, pandas, matplotlib, pytest; optional Weights & Biases.
 
-**Spec:** `docs/superpowers/specs/2026-09-04-paper-baselines-design.md`
+**Spec:** `docs/archive/superpowers/specs/2026-09-04-paper-baselines-design.md`
 
 ## Global Constraints
 - Exactly three algorithms: `masac`, `matd3`, `maddpg`.
@@ -75,7 +75,7 @@
 - [ ] Run smoke and full tests and confirm GREEN.
 
 ### Task 7: Documentation and six-run verification
-**Files:** `README.md`, `docs/PAPER_MAPPING.md`, generated `runs/` artifacts (gitignored)
+**Files:** `README.md`, `docs/legacy/PAPER_MAPPING.md`, generated `runs/` artifacts (gitignored)
 
 - [ ] Document exact commands, structure, assumptions, metrics, troubleshooting, and provenance.
 - [ ] Run `pytest -q`.

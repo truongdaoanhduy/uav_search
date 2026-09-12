@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3, NumPy, Gymnasium, PyTorch, pytest, UavNetSim/SimPy.
 
-**Spec:** `docs/superpowers/specs/2026-09-09-u6-3d-belief-sensing-design.md`
+**Spec:** `docs/archive/superpowers/specs/2026-09-09-u6-3d-belief-sensing-design.md`
 
 ## Global Constraints
 

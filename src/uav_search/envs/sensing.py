@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
-from typing import Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 import numpy as np
-
 
 _COVERAGE_GAUSS_NODES, _COVERAGE_GAUSS_WEIGHTS = np.polynomial.legendre.leggauss(32)
 
@@ -201,7 +200,7 @@ def continuous_fov_offsets(
         raise ValueError("fov_radius_m must be finite and non-negative")
     if not math.isfinite(cell) or cell <= 0.0:
         raise ValueError("grid_cell_m must be finite and positive")
-    max_offset = int(math.ceil(radius / cell))
+    max_offset = math.ceil(radius / cell)
     tolerance = max(1e-9, 1e-12 * max(radius, cell))
     offsets = [
         (dy, dx)
@@ -239,10 +238,10 @@ def continuous_fov_cells(
     if size <= 0:
         raise ValueError("grid_n must be positive")
 
-    min_x = max(0, int(math.floor((center[0] - radius) / cell)))
-    max_x = min(size - 1, int(math.floor((center[0] + radius) / cell)))
-    min_y = max(0, int(math.floor((center[1] - radius) / cell)))
-    max_y = min(size - 1, int(math.floor((center[1] + radius) / cell)))
+    min_x = max(0, math.floor((center[0] - radius) / cell))
+    max_x = min(size - 1, math.floor((center[0] + radius) / cell))
+    min_y = max(0, math.floor((center[1] - radius) / cell))
+    max_y = min(size - 1, math.floor((center[1] + radius) / cell))
     tolerance = max(1e-9, 1e-12 * max(radius, cell))
     cells: list[tuple[int, int]] = []
     for y in range(min_y, max_y + 1):

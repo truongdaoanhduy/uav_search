@@ -148,14 +148,13 @@ def recipient_code(env: PaperUAVEnv, sender: int, recipient: int) -> float:
 
 def idle_actions(env: PaperUAVEnv) -> dict[str, np.ndarray]:
     return {
-        name: np.asarray([-1.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
+        name: np.asarray([0.0, 0.0, 0.0, -1.0, -1.0, -1.0], dtype=np.float32)
         for name in env.agents
     }
 
 
 def tx_to_gcs_actions(env: PaperUAVEnv, sender: int = 0) -> np.ndarray:
     actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
-    actions[:, 0] = -1.0
     actions[:, 3] = -1.0
     actions[:, 4] = -1.0
     actions[:, 5] = -1.0
@@ -231,7 +230,6 @@ def test_depleted_recipient_is_recorded_as_failed_attempt_without_rf_energy(monk
 
     monkeypatch.setattr(env.network_backend, "transmit", no_network_work)
     actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
-    actions[:, 0] = -1.0
     actions[:, 3] = -1.0
     actions[:, 4] = -1.0
     actions[:, 5] = -1.0
@@ -329,7 +327,7 @@ def test_depleted_agent_gets_zero_reward_and_individual_termination() -> None:
     assert not truncated["uav_0"]
 
 
-def test_horizon_mixes_dead_termination_with_live_truncation() -> None:
+def test_peer_mission_horizon_terminates_dead_and_live_agents() -> None:
     cfg = deepcopy(load_config("masac", "u6"))
     cfg["scenario"]["network_backend"] = "analytical"
     cfg["runtime"]["episode_steps_override"] = 1
@@ -343,10 +341,8 @@ def test_horizon_mixes_dead_termination_with_live_truncation() -> None:
 
     _, _, terminated, truncated, info = env.step(idle_actions(env))
 
-    assert terminated["uav_0"]
-    assert not truncated["uav_0"]
-    assert all(not terminated[name] for name in env.agents[1:])
-    assert all(truncated[name] for name in env.agents[1:])
+    assert all(terminated.values())
+    assert not any(truncated.values())
     assert info["termination_reason"] == "horizon"
 
 
@@ -408,7 +404,7 @@ def test_world_constraint_correction_is_separate_and_penalized(constraint: str) 
         for env in (constrained, idle):
             env.positions[0, 0] = 0.0
         action["uav_0"] = np.asarray(
-            [1.0, 1.0, 0.0, -1.0, -1.0, -1.0],
+            [-1.0, 0.0, 0.0, -1.0, -1.0, -1.0],
             dtype=np.float32,
         )
     else:
@@ -555,7 +551,6 @@ def test_peer_sync_fuses_transmitted_quantized_belief_not_float64_oracle() -> No
     env.belief_maps[:, y, x] = 0.5
     env.belief_maps[0, y, x] = 0.9
     actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
-    actions[:, 0] = -1.0
     actions[:, 3] = -1.0
     actions[:, 4] = -1.0
     actions[:, 5] = -1.0
@@ -596,7 +591,6 @@ def test_successful_sync_exposes_cached_sender_queue_to_receiver() -> None:
     assert env._enqueue_report(0, 0)
     before = env._observations()["uav_1"].copy()
     actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
-    actions[:, 0] = -1.0
     actions[:, 3] = -1.0
     actions[:, 4] = -1.0
     actions[:, 5] = -1.0
@@ -654,7 +648,6 @@ def test_successful_peer_report_forward_does_not_create_positive_loop_reward() -
     assert env._enqueue_report(0, 0)
 
     actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
-    actions[:, 0] = -1.0
     actions[:, 3] = -1.0
     actions[:, 4] = -1.0
     actions[:, 5] = -1.0
@@ -676,7 +669,6 @@ def test_peer_sync_attempt_has_explicit_overhead_penalty() -> None:
     env._refresh_links()
 
     actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float64)
-    actions[:, 0] = -1.0
     actions[:, 3] = -1.0
     actions[:, 4] = -1.0
     actions[:, 5] = -1.0

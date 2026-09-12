@@ -7,10 +7,11 @@ import numpy as np
 import torch
 from torch import nn
 
-from .common import soft_update
+from uav_search.runtime import make_adam
+
+from .common import masked_mean, soft_update
 from .maddpg import MADDPG
 from .networks import CentralizedCritic
-from uav_search.runtime import make_adam
 
 
 class MATD3(MADDPG):
@@ -36,7 +37,7 @@ class MATD3(MADDPG):
         # only locally continuous coordinates.
         mask = [1.0] * self.action_dim
         if bool(getattr(env, "peer_mode", False)) and self.action_dim == 6:
-            # [horizontal_thrust, heading, vertical_accel, tx_gate, tx_power, recipient]
+            # [a_x, a_y, a_z, tx_gate, tx_power, recipient]
             # Smooth only continuous physical controls. Gate and recipient are
             # hybrid/discretized coordinates and must not be randomly flipped.
             mask = [1.0, 1.0, 1.0, 0.0, 1.0, 0.0]
@@ -59,12 +60,14 @@ class MATD3(MADDPG):
             return {}
         self.update_step += 1
         b = self.replay.sample(self.batch_size, self.device, non_blocking=self.non_blocking)
-        go = self._global(b.obs)
-        gn = self._global(b.next_obs)
-        ja = b.actions.flatten(start_dim=1)
+        current_valid = b.valids.unsqueeze(-1)
+        next_valid = (b.valids * (1.0 - b.dones)).unsqueeze(-1)
+        go = self._global(b.obs * current_valid)
+        gn = self._global(b.next_obs * next_valid)
+        ja = (b.actions * current_valid).flatten(start_dim=1)
 
         with torch.no_grad(), self.autocast():
-            na = self._actions_tensor(b.next_obs, target=True)
+            na = self._actions_tensor(b.next_obs, target=True) * next_valid
             noise = torch.randn_like(na).mul_(self.policy_noise).clamp_(-self.noise_clip, self.noise_clip)
             noise = noise * self.target_smoothing_mask
             na = (na + noise).clamp(-1.0, 1.0).flatten(start_dim=1)
@@ -82,17 +85,20 @@ class MATD3(MADDPG):
         target_q_means: list[float] = []
         td_errors: list[float] = []
         for i in range(self.n_agents):
+            valid = b.valids[:, i : i + 1]
+            if not bool(torch.any(valid > 0.0).item()):
+                continue
             with self.autocast():
                 q1 = self.critics[i](go, ja)
                 q2 = self.critics2[i](go, ja)
-                l1 = torch.nn.functional.mse_loss(q1, targets[i])
-                l2 = torch.nn.functional.mse_loss(q2, targets[i])
+                l1 = masked_mean((q1 - targets[i]).pow(2), valid)
+                l2 = masked_mean((q2 - targets[i]).pow(2), valid)
             q1d = q1.detach().float()
             q2d = q2.detach().float()
             yd = targets[i].detach().float()
-            q_means.append(float((0.5 * (q1d + q2d)).mean().item()))
-            target_q_means.append(float(yd.mean().item()))
-            td_errors.append(float((0.5 * ((q1d - yd).abs() + (q2d - yd).abs())).mean().item()))
+            q_means.append(float(masked_mean(0.5 * (q1d + q2d), valid).item()))
+            target_q_means.append(float(masked_mean(yd, valid).item()))
+            td_errors.append(float(masked_mean(0.5 * ((q1d - yd).abs() + (q2d - yd).abs()), valid).item()))
             self.optimizer_step(l1, self.critic_opts[i], self.critics[i].parameters())
             self.optimizer_step(l2, self.critic2_opts[i], self.critics2[i].parameters())
             q1_losses.append(float(l1.detach().float().item()))
@@ -102,9 +108,14 @@ class MATD3(MADDPG):
         actor_updated = 0.0
         if self.update_step % self.policy_delay == 0:
             for i in range(self.n_agents):
+                valid = b.valids[:, i : i + 1]
+                if not bool(torch.any(valid > 0.0).item()):
+                    continue
                 with self.autocast():
-                    actions_i = self._joint_actions_for_actor(b.obs, i).flatten(start_dim=1)
-                    loss = -self.critics[i](go, actions_i).mean()
+                    actions_i = (
+                        self._joint_actions_for_actor(b.obs, i) * current_valid
+                    ).flatten(start_dim=1)
+                    loss = -masked_mean(self.critics[i](go, actions_i), valid)
                 self.optimizer_step(loss, self.actor_opts[i], self.actors[i].parameters())
                 actor_losses.append(float(loss.detach().float().item()))
             actor_updated = 1.0

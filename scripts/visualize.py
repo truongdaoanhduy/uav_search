@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+
 from uav_search.runner.visualize import plot_training_curves, plot_trajectory
 
 p = argparse.ArgumentParser(description="Regenerate plots for an existing run.")
