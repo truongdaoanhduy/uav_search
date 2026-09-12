@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from uav_search.actions import canonicalize_peer_action_torch
 from uav_search.runtime import make_adam
 
 from .common import masked_mean, soft_update
@@ -67,10 +68,15 @@ class MATD3(MADDPG):
         ja = (b.actions * current_valid).flatten(start_dim=1)
 
         with torch.no_grad(), self.autocast():
-            na = self._actions_tensor(b.next_obs, target=True) * next_valid
+            na = self._actions_tensor(b.next_obs, target=True)
             noise = torch.randn_like(na).mul_(self.policy_noise).clamp_(-self.noise_clip, self.noise_clip)
-            noise = noise * self.target_smoothing_mask
-            na = (na + noise).clamp(-1.0, 1.0).flatten(start_dim=1)
+            noise = noise * self.target_smoothing_mask * next_valid
+            na = (na + noise).clamp(-1.0, 1.0)
+            if self.peer_mode:
+                na = canonicalize_peer_action_torch(
+                    na, self.n_agents, straight_through=False
+                )
+            na = (na * next_valid).flatten(start_dim=1)
             targets = []
             for i in range(self.n_agents):
                 tq1 = self.target_critics[i](gn, na)
@@ -84,6 +90,7 @@ class MATD3(MADDPG):
         q_means: list[float] = []
         target_q_means: list[float] = []
         td_errors: list[float] = []
+        q_gaps: list[float] = []
         for i in range(self.n_agents):
             valid = b.valids[:, i : i + 1]
             if not bool(torch.any(valid > 0.0).item()):
@@ -99,6 +106,7 @@ class MATD3(MADDPG):
             q_means.append(float(masked_mean(0.5 * (q1d + q2d), valid).item()))
             target_q_means.append(float(masked_mean(yd, valid).item()))
             td_errors.append(float(masked_mean(0.5 * ((q1d - yd).abs() + (q2d - yd).abs()), valid).item()))
+            q_gaps.append(float(masked_mean((q1d - q2d).abs(), valid).item()))
             self.optimizer_step(l1, self.critic_opts[i], self.critics[i].parameters())
             self.optimizer_step(l2, self.critic2_opts[i], self.critics2[i].parameters())
             q1_losses.append(float(l1.detach().float().item()))
@@ -136,7 +144,7 @@ class MATD3(MADDPG):
             "q_mean": float(np.mean(q_means)),
             "target_q_mean": float(np.mean(target_q_means)),
             "td_error_abs_mean": float(np.mean(td_errors)),
-            "q_gap_abs_mean": float(abs(mean_q1 - mean_q2)),
+            "q_gap_abs_mean": float(np.mean(q_gaps)),
         }
 
     def checkpoint(self) -> dict[str, Any]:

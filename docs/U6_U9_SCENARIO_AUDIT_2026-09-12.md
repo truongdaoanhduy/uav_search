@@ -270,6 +270,30 @@ Docstring từng gọi class là PettingZoo ParallelEnv dù interface thực t�
 
 **Sửa:** plot và paper-comparison ưu tiên `return_mean`; W&B thêm `paper/reward_mean` làm metric chính nhưng giữ `paper/reward_total` để tương thích dashboard cũ. Các metric nhiệm vụ (`targets_found`, search/delivery rate, energy, broken-link) vẫn phải là căn cứ chính cho kết luận khoa học.
 
+### 6.16 Non-finite action có thể làm nhiễm reward/replay
+
+**Lỗi:** `PaperUAVEnv.step()` chỉ kiểm tra shape rồi `clip` action. `NaN` đi qua `np.clip`; trong U6/U9 safety fallback có thể kéo position về hữu hạn nhưng reward và correction diagnostic vẫn thành `NaN`. `Inf` cũng bị im lặng đổi thành biên action. Một policy bị numerical instability vì vậy có thể làm nhiễm replay buffer/critic thay vì fail-fast tại nguồn.
+
+**Sửa:** kiểm tra toàn bộ action bằng `np.isfinite` ngay sau stack/shape-check và trước bất kỳ state mutation nào. `NaN`, `+Inf`, `-Inf` đều raise `ValueError`; regression test đồng thời xác nhận position, velocity, battery và `step_count` chưa đổi sau lỗi.
+
+### 6.17 MATD3 target smoothing phá canonical semantics khi TX OFF
+
+**Lỗi:** target actor đã canonicalize `tx_gate=-1 => tx_power=-1, recipient=neutral`, nhưng TD3 target-policy smoothing sau đó vẫn cộng noise vào `tx_power`. Target critic vì thế nhìn thấy các action như `gate=-1, power=-0.8` mà environment/replay canonical không bao giờ thực thi. Đây là off-manifold target action và làm mất ý nghĩa conditional parameter.
+
+**Sửa:** target smoothing chỉ thêm noise lên continuous controls của agent valid, sau đó canonicalize hybrid action lần nữa trước khi đưa vào target critic. Khi TX OFF, power và recipient trở lại đúng neutral semantics.
+
+### 6.18 MATD3 target noise có thể hồi sinh action của UAV invalid
+
+**Lỗi:** code cũ nhân target action với `next_valid` trước, nhưng cộng smoothing noise sau đó. UAV đã depleted/terminal bị zero action vẫn nhận noise ở `a_x/a_y/a_z/tx_power`, nên centralized target critic thấy một agent hậu-terminal tiếp tục hành động.
+
+**Sửa:** mask noise bằng `next_valid` và áp `next_valid` lần cuối sau canonicalization. Regression test đặt agent 0 invalid và ép deterministic smoothing noise, kiểm tra toàn bộ 6 action coordinates của agent đó vẫn chính xác bằng zero trong joint target action.
+
+### 6.19 `q_gap_abs_mean` của MATD3/MASAC đo sai đại lượng
+
+**Lỗi:** metric tên `q_gap_abs_mean` trước đây tính `abs(mean(critic1_loss) - mean(critic2_loss))`. Hai critic có thể cho `Q1=+1`, `Q2=-1` nhưng cùng MSE, khiến metric báo 0 dù critic disagreement thực là 2. Điều này không đổi policy update nhưng làm sai diagnostic/W&B interpretation.
+
+**Sửa:** metric hiện lấy `mean(|Q1-Q2|)` trên các transition valid cho từng agent rồi trung bình qua agent. Regression test dựng Q1/Q2 đối xứng để phân biệt rõ Q-disagreement với loss-disagreement cho cả MATD3 và MASAC.
+
 ## 7. Những việc còn cần hiệu chuẩn/ablation
 
 Các mục sau không phải bug có đáp án duy nhất nên audit giữ nguyên:
@@ -311,16 +335,27 @@ Sun et al. 2026 không còn thuộc nhóm ngoài-local ở lượt follow-up nà
 
 ## 9. Kiểm chứng
 
-- Verification cuối sau action/lifecycle/network/Kaggle hardening phải được chạy lại từ đầu trước khi commit/push; số liệu verification cũ phía dưới không còn được dùng làm bằng chứng cho working tree hiện tại.
+- Fresh verification ngày 2026-09-12 sau patch cuối: `./scripts/verify_repo.sh` pass đủ 6/6 cổng (compile, shell syntax, `git diff --check`, Ruff, strict runtime/UavNetSim preflight, full regression suite). Kết quả suite: **349 passed, 3 CUDA-only skipped**; UavNetSim **2.0.0** đúng commit pin `04daafb815eb377409b40b285574eeb62b9a8d58`, SimPy **4.1.1** đúng pin, U6/U9 đều loadable với backend mặc định `uavnetsim`.
 - Development `run_all.py` đã chạy trọn train → evaluate → paper-comparison cho **MADDPG/MATD3/MASAC × U6/U9** bằng backend mặc định `uavnetsim`, deterministic CPU; cả sáu run đều tạo checkpoint, evaluation output và bốn figure so sánh.
-- Fuzz/invariant probe analytical chạy 12 seed × 120 bước cho mỗi U6/U9, kiểm tra finite observation/reward, map/altitude bounds, obstacle exclusion, finite-buffer conservation và zero topology cho UAV inactive; không phát hiện vi phạm invariant.
-- Regression bao phủ: confirmation tích lũy; endpoint-safe belief codec; fan-in reservation; depleted-recipient feedback; false-confirmation penalty; world/pair correction; per-agent depletion; mixed done dictionaries; previous-recipient feature; idle/active interference; contiguous closed-slot prefix; không có late work; byte-proportional reward.
+- Fuzz/invariant probe analytical chạy 12 seed × 120 bước cho mỗi U6/U9 (**2,880 transitions**), kiểm tra finite observation/reward, map/altitude bounds, obstacle exclusion, finite-buffer conservation và zero topology cho UAV inactive; không phát hiện vi phạm invariant.
+- Regression bao phủ: confirmation tích lũy; endpoint-safe belief codec; fan-in reservation; depleted-recipient feedback; false-confirmation penalty; world/pair correction; per-agent depletion; mixed done dictionaries; previous-recipient feature; idle/active interference; contiguous closed-slot prefix; không có late work; byte-proportional reward; reject `NaN/±Inf` trước state mutation; MATD3 target smoothing giữ canonical TX-off semantics; target noise không hồi sinh invalid agent; `q_gap_abs_mean` đo đúng `|Q1-Q2|` cho MATD3/MASAC.
 - Stress probe u9 với 9 intent đồng thời (2,250,000 B requested): có đủ 9 outcome, commit 129,024 B; hai lần chạy cùng seed cho kết quả giống hệt; sau busy slot và idle slot đều còn 0 pending completion, 0 MAC bookkeeping entry và 0 late event.
-- `git diff --check` và kiểm tra compile đều pass.
 - Algorithm layer hiện có per-agent validity masking và hybrid-action canonicalization; checkpoint U6/U9 cũ không được resume cho scientific run mới.
 - Push chỉ được thực hiện sau khi toàn bộ các cổng kiểm chứng trên xanh.
 
 ## 10. File thay đổi chính
+
+Các file được sửa thêm trong lượt audit cuối này:
+
+- `src/uav_search/envs/paper_env.py`
+- `src/uav_search/algorithms/matd3.py`
+- `src/uav_search/algorithms/masac.py`
+- `tests/test_scenario_audit_regressions.py`
+- `tests/test_action_semantics_regressions.py`
+- `tests/test_algorithms.py`
+- `docs/U6_U9_SCENARIO_AUDIT_2026-09-12.md`
+
+Danh sách file chính của toàn bộ chuỗi hardening trước đó:
 
 - `src/uav_search/envs/paper_env.py`
 - `src/uav_search/envs/sensing.py`

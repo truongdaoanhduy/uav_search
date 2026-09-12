@@ -2,6 +2,7 @@ from copy import deepcopy
 
 import numpy as np
 import pytest
+import torch
 
 from uav_search.algorithms.factory import make_algorithm
 from uav_search.config import load_config
@@ -88,3 +89,71 @@ def test_cpu_runtime_profile_keeps_amp_disabled(name):
     assert algo.runtime_profile.device.type == "cpu"
     assert algo.runtime_profile.amp_enabled is False
     assert algo.scaler.is_enabled() is False
+
+
+class _ConstantCritic(torch.nn.Module):
+    def __init__(self, value: float):
+        super().__init__()
+        self.value = float(value)
+
+    def forward(self, obs: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        return torch.full(
+            (obs.shape[0], 1), self.value, dtype=obs.dtype, device=obs.device
+        )
+
+
+@pytest.mark.parametrize("name", ["matd3", "masac"])
+def test_twin_critic_q_gap_metric_measures_q_disagreement_not_loss_gap(name, monkeypatch):
+    cfg = deepcopy(load_config(name, "f1_m5"))
+    cfg["runtime"]["batch_size"] = 1
+    cfg["runtime"]["replay_size"] = 4
+    cfg["runtime"]["hidden_sizes"] = [8, 8]
+    if name == "matd3":
+        cfg["algorithm"]["policy_delay"] = 2
+    env = PaperUAVEnv(cfg, seed=17)
+    algo = make_algorithm(name, env, cfg, device="cpu", seed=17)
+
+    obs = np.zeros((env.n_agents, env.obs_dim), dtype=np.float32)
+    actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float32)
+    rewards = np.zeros(env.n_agents, dtype=np.float32)
+    dones = np.zeros(env.n_agents, dtype=np.float32)
+    algo.store(obs, actions, rewards, obs, dones)
+
+    # Make Q1=+1 and Q2=-1 while both critics have the same MSE to target Q=0.
+    # A true Q-gap metric is therefore exactly 2, whereas a loss-gap metric is 0.
+    for i in range(env.n_agents):
+        if name == "matd3":
+            algo.critics[i] = _ConstantCritic(1.0)
+            algo.critics2[i] = _ConstantCritic(-1.0)
+            algo.target_critics[i] = _ConstantCritic(0.0)
+            algo.target_critics2[i] = _ConstantCritic(0.0)
+        else:
+            algo.critics1[i] = _ConstantCritic(1.0)
+            algo.critics2[i] = _ConstantCritic(-1.0)
+            algo.target_critics1[i] = _ConstantCritic(0.0)
+            algo.target_critics2[i] = _ConstantCritic(0.0)
+
+    monkeypatch.setattr(algo, "optimizer_step", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(algo, "finish_optimizer_steps", lambda: None)
+    if name == "masac":
+        def zero_sample(sample_obs, **_kwargs):
+            batch = sample_obs.shape[0]
+            return (
+                torch.zeros(
+                    (batch, env.n_agents, env.action_dim),
+                    dtype=sample_obs.dtype,
+                    device=sample_obs.device,
+                ),
+                torch.zeros(
+                    (batch, env.n_agents, 1),
+                    dtype=sample_obs.dtype,
+                    device=sample_obs.device,
+                ),
+            )
+
+        monkeypatch.setattr(algo, "_sample_actions", zero_sample)
+
+    metrics = algo.update()
+    assert metrics["critic1_loss"] == pytest.approx(1.0)
+    assert metrics["critic2_loss"] == pytest.approx(1.0)
+    assert metrics["q_gap_abs_mean"] == pytest.approx(2.0)

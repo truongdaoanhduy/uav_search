@@ -368,3 +368,29 @@ def test_radio_depletion_refreshes_topology_before_next_observation(monkeypatch)
     assert env.min_power_gcs_rates_bps[0] == 0.0
     assert env.max_power_gcs_rates_bps[0] == 0.0
     assert info["active_uavs"] == env.n_agents - 1
+
+
+@pytest.mark.parametrize("bad_value", [np.nan, np.inf, -np.inf])
+def test_env_rejects_nonfinite_actions_before_state_mutation(bad_value: float) -> None:
+    """Invalid policy outputs must fail fast instead of poisoning rewards/replay."""
+    cfg = deepcopy(load_config("masac", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    env = PaperUAVEnv(cfg, seed=908)
+    env.reset(seed=908)
+    positions_before = env.positions.copy()
+    velocities_before = env.velocities.copy()
+    battery_before = env.battery_pct.copy()
+    step_before = env.step_count
+
+    actions = {
+        agent: np.zeros(env.action_dim, dtype=np.float32) for agent in env.agents
+    }
+    actions[env.agents[0]][0] = bad_value
+
+    with pytest.raises(ValueError, match="finite"):
+        env.step(actions)
+
+    np.testing.assert_array_equal(env.positions, positions_before)
+    np.testing.assert_array_equal(env.velocities, velocities_before)
+    np.testing.assert_array_equal(env.battery_pct, battery_before)
+    assert env.step_count == step_before

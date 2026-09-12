@@ -1973,6 +1973,8 @@ class PaperUAVEnv:
         act = np.stack([np.asarray(actions[a], dtype=np.float64) for a in self.agents])
         if act.shape != (self.n_agents, self.action_dim):
             raise ValueError(f"Expected actions {(self.n_agents, self.action_dim)}, got {act.shape}")
+        if not np.all(np.isfinite(act)):
+            raise ValueError("Actions must contain only finite values")
         act = np.clip(act, -1.0, 1.0)
         motion_act = act[:, :2]
         action_saturation = (

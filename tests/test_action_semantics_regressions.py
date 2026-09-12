@@ -111,3 +111,101 @@ def test_peer_action_saturation_ignores_hard_gate_recipient_and_inactive_power()
     actions = neutral_actions(env)
     _obs, _rewards, _terminated, _truncated, info = env.step(actions)
     assert info["action_saturation"] == pytest.approx(0.0)
+
+
+def test_matd3_target_smoothing_keeps_tx_off_conditional_controls_canonical(monkeypatch) -> None:
+    """TD3 target noise must not revive RF power when the hard TX gate is off."""
+    env = make_env("matd3")
+    cfg = deepcopy(load_config("matd3", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    cfg["runtime"]["batch_size"] = 1
+    cfg["runtime"]["replay_size"] = 4
+    cfg["runtime"]["hidden_sizes"] = [8, 8]
+    algo = make_algorithm("matd3", env, cfg, device="cpu", seed=315)
+
+    obs = np.zeros((env.n_agents, env.obs_dim), dtype=np.float32)
+    actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float32)
+    actions[:, 3] = -1.0
+    actions[:, 4] = -1.0
+    actions[:, 5] = peer_recipient_bin_centers(env.n_agents)[0]
+    algo.store(
+        obs,
+        actions,
+        np.zeros(env.n_agents, dtype=np.float32),
+        obs,
+        np.zeros(env.n_agents, dtype=np.float32),
+    )
+
+    canonical_target = torch.as_tensor(actions, dtype=torch.float32).unsqueeze(0)
+    monkeypatch.setattr(
+        algo,
+        "_actions_tensor",
+        lambda _obs, target=False: canonical_target.to(algo.device).clone(),
+    )
+    monkeypatch.setattr(torch, "randn_like", lambda tensor: torch.ones_like(tensor))
+
+    captured: dict[str, torch.Tensor] = {}
+    original_forward = algo.target_critics[0].forward
+
+    def capture_forward(global_obs: torch.Tensor, joint_action: torch.Tensor) -> torch.Tensor:
+        captured["joint_action"] = joint_action.detach().cpu().clone()
+        return original_forward(global_obs, joint_action)
+
+    monkeypatch.setattr(algo.target_critics[0], "forward", capture_forward)
+    algo.update()
+
+    joint = captured["joint_action"].reshape(1, env.n_agents, env.action_dim)
+    assert torch.all(joint[..., 3] == -1.0)
+    assert torch.all(joint[..., 4] == -1.0)
+    expected_recipient = float(peer_recipient_bin_centers(env.n_agents)[0])
+    assert torch.allclose(
+        joint[..., 5], torch.full_like(joint[..., 5], expected_recipient)
+    )
+
+
+def test_matd3_target_smoothing_does_not_revive_invalid_agent_actions(monkeypatch) -> None:
+    """Per-agent validity masking must remain zero after TD3 target noise."""
+    env = make_env("matd3")
+    cfg = deepcopy(load_config("matd3", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    cfg["runtime"]["batch_size"] = 1
+    cfg["runtime"]["replay_size"] = 4
+    cfg["runtime"]["hidden_sizes"] = [8, 8]
+    algo = make_algorithm("matd3", env, cfg, device="cpu", seed=316)
+
+    obs = np.zeros((env.n_agents, env.obs_dim), dtype=np.float32)
+    actions = np.zeros((env.n_agents, env.action_dim), dtype=np.float32)
+    actions[:, 3] = 1.0
+    actions[:, 4] = 0.0
+    actions[:, 5] = peer_recipient_bin_centers(env.n_agents)[1]
+    valids = np.ones(env.n_agents, dtype=np.float32)
+    valids[0] = 0.0
+    algo.store(
+        obs,
+        actions,
+        np.zeros(env.n_agents, dtype=np.float32),
+        obs,
+        np.zeros(env.n_agents, dtype=np.float32),
+        valids=valids,
+    )
+
+    canonical_target = torch.as_tensor(actions, dtype=torch.float32).unsqueeze(0)
+    monkeypatch.setattr(
+        algo,
+        "_actions_tensor",
+        lambda _obs, target=False: canonical_target.to(algo.device).clone(),
+    )
+    monkeypatch.setattr(torch, "randn_like", lambda tensor: torch.ones_like(tensor))
+
+    captured: dict[str, torch.Tensor] = {}
+    original_forward = algo.target_critics[1].forward
+
+    def capture_forward(global_obs: torch.Tensor, joint_action: torch.Tensor) -> torch.Tensor:
+        captured["joint_action"] = joint_action.detach().cpu().clone()
+        return original_forward(global_obs, joint_action)
+
+    monkeypatch.setattr(algo.target_critics[1], "forward", capture_forward)
+    algo.update()
+
+    joint = captured["joint_action"].reshape(1, env.n_agents, env.action_dim)
+    assert torch.all(joint[:, 0, :] == 0.0)
