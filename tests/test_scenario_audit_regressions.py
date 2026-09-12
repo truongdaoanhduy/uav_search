@@ -329,3 +329,43 @@ def test_analytical_simultaneous_sender_contributes_interference() -> None:
     )
 
     assert concurrent.outcomes[0].rate_bps < lone.outcomes[0].rate_bps
+
+
+def test_radio_depletion_refreshes_topology_before_next_observation(monkeypatch) -> None:
+    """A UAV that dies from radio energy must disappear from next-state links immediately."""
+    cfg = deepcopy(load_config("masac", "u6"))
+    cfg["scenario"]["network_backend"] = "analytical"
+    env = PaperUAVEnv(cfg, seed=907)
+    env.reset(seed=907)
+    env.positions[:] = np.array(
+        [[400.0 + 200.0 * i, 2500.0, 100.0] for i in range(env.n_agents)],
+        dtype=np.float64,
+    )
+    env._refresh_links()
+    assert np.any(env.max_power_pair_rates_bps[0, 1:] > 0.0)
+
+    def drain_sender_zero(_intents, *_args, **_kwargs):
+        return NetworkStepResult(
+            tx_energy_j=300_000.0,
+            node_tx_energy_j={0: 300_000.0},
+        )
+
+    monkeypatch.setattr(env.network_backend, "transmit", drain_sender_zero)
+    action_array = np.zeros((env.n_agents, env.action_dim), dtype=np.float32)
+    action_array[:, 0] = -1.0
+    action_array[:, 3] = -1.0
+    action_array[0, 3] = 1.0
+    action_array[0, 5] = recipient_code(env, 0, 1)
+    action_dict = {agent: action_array[i] for i, agent in enumerate(env.agents)}
+
+    _obs, _reward, terminated, _truncated, info = env.step(action_dict)
+
+    assert terminated["uav_0"] is True
+    assert env.uav_active[0] is np.False_
+    assert np.all(env.min_power_pair_rates_bps[0, :] == 0.0)
+    assert np.all(env.min_power_pair_rates_bps[:, 0] == 0.0)
+    assert np.all(env.max_power_pair_rates_bps[0, :] == 0.0)
+    assert np.all(env.max_power_pair_rates_bps[:, 0] == 0.0)
+    assert env.min_power_gcs_rates_bps[0] == 0.0
+    assert env.max_power_gcs_rates_bps[0] == 0.0
+    assert info["active_uavs"] == env.n_agents - 1

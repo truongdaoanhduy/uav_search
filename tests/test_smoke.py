@@ -98,6 +98,8 @@ def test_wandb_update_metrics_are_throttled_to_every_100_updates(monkeypatch, tm
     assert "swarm/safety_distance_violation_uavs" in episode_payload
     assert "group/fixed_return_mean" in episode_payload
     assert "group/rotor_return_mean" in episode_payload
+    assert "paper/reward_mean" in episode_payload
+    assert "paper/reward_total" in episode_payload
     assert not any("/agent/" in key or "worst_agent" in key for key in episode_payload)
 
 

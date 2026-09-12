@@ -41,3 +41,26 @@ def test_paper_comparison_creates_fig7_and_fig10_to_fig12(tmp_path):
         "fig12_average_broken_link_duration.png",
     }
     assert all(p.exists() and p.stat().st_size > 0 for p in paths)
+
+
+def test_training_reward_curve_prefers_per_agent_mean_when_both_metrics_exist(monkeypatch, tmp_path):
+    from uav_search.runner import visualize as viz
+
+    csv_path = tmp_path / "episodes.csv"
+    pd.DataFrame({
+        "episode": [1, 2],
+        "return_mean": [1.0, 2.0],
+        "return_sum": [6.0, 12.0],
+    }).to_csv(csv_path, index=False)
+    seen = []
+
+    def capture_curve(df, x, y, ylabel, path):
+        seen.append((x, y, ylabel, path.name))
+        return path
+
+    monkeypatch.setattr(viz, "_curve", capture_curve)
+    paths = viz.plot_training_curves(csv_path, tmp_path / "plots")
+
+    assert paths
+    assert seen[0][1] == "return_mean"
+    assert seen[0][2] == "Mean per-agent episode return"

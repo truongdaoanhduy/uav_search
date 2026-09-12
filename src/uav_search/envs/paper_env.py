@@ -2164,9 +2164,14 @@ class PaperUAVEnv:
                     self.battery_pct[i] - 100.0 * e_net / self.peer_battery_capacity_j,
                 )
             # A radio-depleted UAV must not obtain fresh sensing evidence later in
-            # the same transition.
+            # the same transition. If radio energy changes liveness, the pre-TX
+            # topology snapshot is stale and must be refreshed before computing
+            # GCS reachability or the next observation.
+            active_before_radio_depletion = self.uav_active.copy()
             self.uav_active &= self.battery_pct > 0.0
             self.velocities[~self.uav_active] = 0.0
+            if not np.array_equal(self.uav_active, active_before_radio_depletion):
+                self._refresh_links()
             self._expire_reports()
             self._perform_peer_target_detection()
             self._retry_pending_reports()

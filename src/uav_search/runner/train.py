@@ -360,6 +360,10 @@ def train_experiment(
             # optimizer updates remain in local CSV and are mirrored only every N updates.
             wandb_episode = {
                 "paper/episode": episode,
+                # Keep the historical team-total key for backwards-compatible
+                # dashboards, but expose a swarm-size-invariant primary reward
+                # for comparisons between U6 and U9.
+                "paper/reward_mean": ep_metrics["return_mean"],
                 "paper/reward_total": ep_metrics["return_sum"],
                 "paper/targets_found": ep_metrics["targets_found"],
                 "paper/search_rate": ep_metrics["search_rate"],

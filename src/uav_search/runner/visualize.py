@@ -50,11 +50,13 @@ def plot_training_curves(metrics_csv: str | Path, output_dir: str | Path) -> lis
     df = pd.read_csv(metrics_csv)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    reward_col = "return_sum" if "return_sum" in df.columns else "return_mean"
+    # Per-agent mean is comparable across U6/U9, whereas team return_sum scales
+    # mechanically with swarm size when rewards are shared across active agents.
+    reward_col = "return_mean" if "return_mean" in df.columns else "return_sum"
     energy_col = "energy_consumption_pct" if "energy_consumption_pct" in df.columns else "energy_j"
     energy_label = "Average multi-rotor battery consumption (%)" if energy_col == "energy_consumption_pct" else "Multi-rotor energy (J)"
     specs = [
-        (reward_col, "Team episode return", "reward.png"),
+        (reward_col, "Mean per-agent episode return" if reward_col == "return_mean" else "Team episode return", "reward.png"),
         ("search_rate", "Target search rate", "search_rate.png"),
         (energy_col, energy_label, "energy.png"),
         ("mean_broken_link_s", "Mean broken-link duration (s)", "broken_link.png"),
@@ -188,7 +190,7 @@ def plot_paper_comparison(
             if key not in run_dirs:
                 continue
             df = pd.read_csv(Path(run_dirs[key]) / "metrics" / "episodes.csv")
-            y = "return_sum" if "return_sum" in df.columns else "return_mean"
+            y = "return_mean" if "return_mean" in df.columns else "return_sum"
             window = min(500, max(1, len(df) // 50))
             values = df[y].rolling(window=window, min_periods=1).mean()
             ax.plot(df["episode"], values, linewidth=1.5, label=algorithm.upper())

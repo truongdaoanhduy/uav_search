@@ -253,6 +253,18 @@ Docstring từng gọi class là PettingZoo ParallelEnv dù interface thực t�
 
 **Sửa:** slot đó chứa tâm bin action của recipient trước, `last_tx_active` làm validity flag. U6/U9 vẫn 158/197 chiều; legacy heading không đổi. Checkpoint cũ tương thích shape nhưng không tương thích nghĩa, nên phải retrain cho run khoa học mới.
 
+### 6.14 Topology stale sau khi cạn pin vì radio
+
+**Lỗi:** topology được refresh trước pha truyền. Nếu radio energy trong chính slot đó làm một UAV cạn pin, `uav_active` chuyển sang false nhưng ma trận pair/GCS-rate và adjacency của snapshot trước truyền vẫn còn giữ link tới UAV vừa chết cho đến slot kế tiếp. Điều này có thể làm next observation và GCS-hop diagnostics nhìn thấy một link không còn tồn tại.
+
+**Sửa:** sau khi trừ radio energy, so sánh liveness trước/sau. Chỉ khi có UAV đổi trạng thái active→inactive mới refresh topology lần nữa trước TTL/sensing/next observation. Regression test ép UAV 0 cạn pin bằng radio và kiểm tra toàn bộ min/max pair-rate, GCS-rate và active count được cập nhật ngay trong cùng transition.
+
+### 6.15 Reward metric U6/U9 không được lấy team sum làm metric chính
+
+**Lỗi:** `return_sum` cộng reward của mọi agent nên tăng/giảm cơ học theo kích thước swarm khi team reward được broadcast. Plot training và W&B trước đây dùng `return_sum`/`paper/reward_total` làm reward-facing metric, dễ làm so sánh U6 với U9 sai nghĩa dù trainer đã dùng `return_mean` cho score.
+
+**Sửa:** plot và paper-comparison ưu tiên `return_mean`; W&B thêm `paper/reward_mean` làm metric chính nhưng giữ `paper/reward_total` để tương thích dashboard cũ. Các metric nhiệm vụ (`targets_found`, search/delivery rate, energy, broken-link) vẫn phải là căn cứ chính cho kết luận khoa học.
+
 ## 7. Những việc còn cần hiệu chuẩn/ablation
 
 Các mục sau không phải bug có đáp án duy nhất nên audit giữ nguyên:
@@ -281,21 +293,22 @@ Các paper nền tảng dưới đây đã có trong thư mục của bạn:
 | *Joint Trajectory and Communication Design for Buffer-Aided Multi-UAV Relaying Networks* | `02_supporting/` | power 0.1–0.4 W và slot-based relaying |
 | *Drone delivery problem with multi-flight level* | `02_supporting/` | mốc độ cao 50/100/150 m |
 | *Reinforcement Learning-Based Dynamic Coverage Control of Multi-Rotor UAVs With Safety Priority* | thư mục gốc | safety filter và corrective/buffer reward |
+| Sun et al., *Multi-Agent Reinforcement Learning Based on Hybrid Action Representation for UAV Swarms' Integrated Communication and Control* | thư mục gốc | bằng chứng UAV-specific rằng trajectory/power là continuous trong khi resource/association là discrete; hỗ trợ kết luận action hiện tại là hybrid approximation và nên ablation bằng actor hybrid thật |
 
-Ba paper ngoài cây local đã được tra cứu và phải được báo riêng:
+Hai paper ngoài cây local đã được tra cứu trong audit trước và phải được báo riêng:
 
 | Paper ngoài local | Link chính thức/toàn văn | Vai trò trong quyết định |
 |---|---|---|
 | Khan, Yanmaz, Rinner, *Information Merging in Multi-UAV Cooperative Search*, ICRA 2014 | [PDF tác giả](https://pervasive.uni-klu.ac.at/BR/pubs/2014/Khan_ICRA2014.pdf) | Occupancy-map merging có giới hạn communication và detection error; củng cố yêu cầu không tạo certainty giả. Codec byte cụ thể vẫn là adaptation của dự án. |
 | Xiong et al., *Parametrized Deep Q-Networks Learning*, 2018 | [arXiv 1810.06394](https://arxiv.org/abs/1810.06394) · [PDF](https://arxiv.org/pdf/1810.06394) | Phương án actor rời rạc-liên tục cho future work; không được dùng để đổi MASAC/MADDPG/MATD3 trong patch này. |
-| Sun et al., *Multi-Agent Reinforcement Learning Based on Hybrid Action Representation for UAV Swarms' Integrated Communication and Control*, IEEE LWC 2026 | [DOI 10.1109/LWC.2026.3663841](https://doi.org/10.1109/LWC.2026.3663841) | Bằng chứng UAV-specific cho hướng hybrid communication/control; chỉ là future-work provenance, trang IEEE có thể yêu cầu quyền truy cập. |
 
-Ngoài ba nguồn này, tra cứu web/plugin được dùng để kiểm tra metadata, paper liên quan và contract Gymnasium; các constant kịch bản không được âm thầm thay bằng số ngoài paper local.
+Sun et al. 2026 không còn thuộc nhóm ngoài-local ở lượt follow-up này vì PDF đã được tải vào thư mục gốc ngày 2026-09-12. Tra cứu web/plugin chỉ dùng để kiểm tra metadata/paper liên quan và contract Gymnasium; các constant kịch bản không được âm thầm thay bằng số ngoài paper local.
 
 ## 9. Kiểm chứng
 
-- Lượt sạch sau residual hardening: `python -m compileall -q src tests && pytest -q` đạt **300 passed, 3 skipped trong 120.68 s**.
-- Nhóm regression environment/runner mới đạt **48 passed**; smoke test MASAC/MADDPG/MATD3 đạt **25 passed, 3 skipped**.
+- Lượt full verification follow-up sau hai fix mới: `python -m compileall -q src scripts tests`, `git diff --check`, rồi `pytest -q -rs` đạt **302 passed, 3 skipped trong 116.35 s**. Ba skip đều là test CUDA vì máy audit không có CUDA khả dụng.
+- Development `run_all.py` đã chạy trọn train → evaluate → paper-comparison cho **MADDPG/MATD3/MASAC × U6/U9** bằng backend mặc định `uavnetsim`, deterministic CPU; cả sáu run đều tạo checkpoint, evaluation output và bốn figure so sánh.
+- Fuzz/invariant probe analytical chạy 12 seed × 120 bước cho mỗi U6/U9, kiểm tra finite observation/reward, map/altitude bounds, obstacle exclusion, finite-buffer conservation và zero topology cho UAV inactive; không phát hiện vi phạm invariant.
 - Regression bao phủ: confirmation tích lũy; endpoint-safe belief codec; fan-in reservation; depleted-recipient feedback; false-confirmation penalty; world/pair correction; per-agent depletion; mixed done dictionaries; previous-recipient feature; idle/active interference; contiguous closed-slot prefix; không có late work; byte-proportional reward.
 - Stress probe u9 với 9 intent đồng thời (2,250,000 B requested): có đủ 9 outcome, commit 129,024 B; hai lần chạy cùng seed cho kết quả giống hệt; sau busy slot và idle slot đều còn 0 pending completion, 0 MAC bookkeeping entry và 0 late event.
 - `git diff --check` và kiểm tra compile đều pass.
@@ -309,6 +322,7 @@ Ngoài ba nguồn này, tra cứu web/plugin được dùng để kiểm tra met
 - `src/uav_search/envs/network_backends.py`
 - `src/uav_search/runner/termination.py`
 - `src/uav_search/runner/train.py`
+- `src/uav_search/runner/visualize.py`
 - `src/uav_search/runner/network_calibration.py`
 - `configs/scenarios/u6.yaml`
 - `configs/scenarios/u9.yaml`

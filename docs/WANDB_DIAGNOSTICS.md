@@ -1,13 +1,15 @@
 # W&B monitoring — compact aggregate telemetry
 
-Current reproduction scope: `f1_m5` and `f1_m9`, with `MASAC`, `MATD3`, and `MADDPG`.
+Current active homogeneous-swarm scope: `u6` and `u9`, with `MASAC`, `MATD3`, and `MADDPG`.
+Legacy `f*_m*` reproduction scenarios remain available, but cross-swarm reward comparisons below use the per-agent mean rather than the team sum.
 The tracking policy intentionally avoids per-UAV series so a 50,000-episode run stays readable.
 Detailed raw optimizer updates remain available locally in `metrics/updates.csv`.
 
 ## What is sent to W&B every episode
 
 ### Paper-facing results
-- `paper/reward_total`
+- `paper/reward_mean` — primary reward metric for comparisons across different swarm sizes (`u6` vs `u9`)
+- `paper/reward_total` — retained for backwards-compatible dashboards; do not use it as the primary U6/U9 comparison because shared rewards make it scale with agent count
 - `paper/targets_found`
 - `paper/search_rate`
 - `paper/energy_consumption_pct`
